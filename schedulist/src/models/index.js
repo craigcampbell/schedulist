@@ -27,8 +27,19 @@ db.Patient = require('./patient.model')(sequelize, Sequelize);
 db.Appointment = require('./appointment.model')(sequelize, Sequelize);
 db.Note = require('./note.model')(sequelize, Sequelize);
 db.Location = require('./location.model')(sequelize, Sequelize);
+db.Organization = require('./organization.model')(sequelize);
 
 // Define associations
+
+// Organization relationships
+db.Organization.hasMany(db.User, { foreignKey: 'organizationId', as: 'users' });
+db.User.belongsTo(db.Organization, { foreignKey: 'organizationId' });
+
+db.Organization.hasMany(db.Location, { foreignKey: 'organizationId', as: 'locations' });
+db.Location.belongsTo(db.Organization, { foreignKey: 'organizationId' });
+
+db.Organization.hasMany(db.Patient, { foreignKey: 'organizationId', as: 'patients' });
+db.Patient.belongsTo(db.Organization, { foreignKey: 'organizationId' });
 
 // User and Role relationship (many-to-many)
 db.User.belongsToMany(db.Role, { through: 'UserRoles' });

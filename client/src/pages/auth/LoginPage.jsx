@@ -30,8 +30,11 @@ export default function LoginPage() {
     setError(null);
     
     try {
+      console.log('Attempting login with:', data.email, data.password);
       await login(data.email, data.password);
+      console.log('Login successful');
     } catch (err) {
+      console.error('Login error:', err);
       setError(err.response?.data?.message || 'Failed to login. Please check your credentials.');
     } finally {
       setLoading(false);

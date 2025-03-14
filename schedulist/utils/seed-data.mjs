@@ -1,8 +1,7 @@
-const { faker } = require('@faker-js/faker');
-const bcrypt = require('bcrypt');
-const db = require('../models');
-const { encrypt } = require('./encryption');
-const { addDays, subDays, addHours, addMonths, subMonths } = require('date-fns');
+import { faker } from '@faker-js/faker';
+import bcrypt from 'bcrypt';
+import { addDays, subDays, addHours, addMonths, subMonths } from 'date-fns';
+import db from '../src/models/index.js';
 
 // Number of users and entities to create
 const NUM_ADMINS = 2;
@@ -681,7 +680,7 @@ async function createUserWithOrg(userData, orgId, role) {
   const user = await db.User.create({
     firstName: userData.firstName,
     lastName: userData.lastName,
-    email: userData.email,
+    email: userData.email, // Ensure no mailto: prefix
     password: hashedPassword,
     phone: faker.phone.number(),
     organizationId: orgId,
@@ -704,7 +703,7 @@ async function createUser(userData = null, orgId = null) {
     return await db.User.create({
       firstName: userData.firstName,
       lastName: userData.lastName,
-      email: userData.email,
+      email: userData.email, // Ensure no mailto: prefix
       password: hashedPassword,
       phone: faker.phone.number(),
       organizationId: orgId,
@@ -715,7 +714,8 @@ async function createUser(userData = null, orgId = null) {
   // Otherwise create a random user
   const firstName = faker.person.firstName();
   const lastName = faker.person.lastName();
-  const email = faker.internet.email({ firstName, lastName }).toLowerCase();
+  // Ensure no mailto: prefix by creating email directly
+  const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.com`.replace(/[^a-zA-Z0-9.@]/g, '');
   const password = faker.internet.password({ length: 10 });
   const hashedPassword = await bcrypt.hash(password, salt);
   
@@ -748,7 +748,7 @@ async function createLocation(orgId = null) {
 async function createPatient(orgId = null) {
   const firstName = faker.person.firstName();
   const lastName = faker.person.lastName();
-  const dateOfBirth = faker.date.birthdate({ min: 2, max: 18 });
+  const dateOfBirth = faker.date.birthdate({ min: 2, max: 18, mode: 'age' });
   const insuranceProvider = faker.helpers.arrayElement([
     'Blue Cross', 'Aetna', 'Cigna', 'UnitedHealthcare', 'Humana', 'Kaiser', 'Medicare', 'Medicaid'
   ]);
@@ -845,10 +845,9 @@ function getRandomElements(array, count) {
   return shuffled.slice(0, Math.min(count, array.length));
 }
 
-// Export the seeder
-module.exports = seedDatabase;
-
 // Run if this file is executed directly
-if (require.main === module) {
+if (process.argv[1] === import.meta.url) {
   seedDatabase();
 }
+
+export default seedDatabase;
