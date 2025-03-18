@@ -23,6 +23,7 @@ export default function LoginPage() {
       email: '',
       password: '',
     },
+    mode: 'onBlur',
   });
 
   const onSubmit = async (data) => {
@@ -36,13 +37,13 @@ export default function LoginPage() {
     } catch (err) {
       console.error('Login error:', err);
       setError(err.response?.data?.message || 'Failed to login. Please check your credentials.');
-    } finally {
-      setLoading(false);
+      setLoading(false); // Important: Set loading to false on error
     }
+    // Remove the finally block so loading stays true during redirection
   };
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-6" noValidate>
       <div>
         <label htmlFor="email" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
           Email
@@ -85,7 +86,7 @@ export default function LoginPage() {
       </div>
 
       {error && (
-        <div className="p-2 text-sm text-center rounded bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-400">
+        <div className="p-3 text-sm font-bold text-center rounded border-2 border-red-500 bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
           {error}
         </div>
       )}

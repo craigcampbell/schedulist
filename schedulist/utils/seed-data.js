@@ -1,5 +1,6 @@
 const { faker } = require('@faker-js/faker');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const db = require('../src/models');
 const { addDays, subDays, addHours, addMonths, subMonths } = require('date-fns');
 
@@ -367,6 +368,11 @@ const seedDatabase = async () => {
       const selectedBcbas = getRandomElements(activeBCBAs, numBcbas);
       await patient.addAssignees(selectedBcbas);
       
+      // Set one BCBA as primary
+      const primaryBcba = selectedBcbas[0]; // First selected BCBA becomes primary
+      patient.primaryBcbaId = primaryBcba.id;
+      await patient.save();
+      
       // Assign to 1-3 therapists
       const numTherapists = Math.floor(Math.random() * 3) + 1;
       const selectedTherapists = getRandomElements(activeTherapists, numTherapists);
@@ -383,6 +389,11 @@ const seedDatabase = async () => {
       const selectedBcbas = getRandomElements(expiringBCBAs, numBcbas);
       await patient.addAssignees(selectedBcbas);
       
+      // Set one BCBA as primary
+      const primaryBcba = selectedBcbas[0]; // First selected BCBA becomes primary
+      patient.primaryBcbaId = primaryBcba.id;
+      await patient.save();
+      
       // Assign to 1-3 therapists
       const numTherapists = Math.floor(Math.random() * 3) + 1;
       const selectedTherapists = getRandomElements(expiringTherapists, numTherapists);
@@ -398,6 +409,11 @@ const seedDatabase = async () => {
       const numBcbas = Math.random() > 0.7 ? 2 : 1;
       const selectedBcbas = getRandomElements(inactiveBCBAs, numBcbas);
       await patient.addAssignees(selectedBcbas);
+      
+      // Set one BCBA as primary
+      const primaryBcba = selectedBcbas[0]; // First selected BCBA becomes primary
+      patient.primaryBcbaId = primaryBcba.id;
+      await patient.save();
       
       // Assign to 1-3 therapists
       const numTherapists = Math.floor(Math.random() * 3) + 1;
@@ -674,18 +690,31 @@ const seedDatabase = async () => {
 
 // Helper function to create a user with organization and role
 async function createUserWithOrg(userData, orgId, role) {
-  const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash(userData.password, salt);
+  // Directly insert the user with raw SQL to bypass Sequelize hooks that would hash the password again
+  const userId = await db.sequelize.query(
+    `INSERT INTO "Users" 
+     ("id", "firstName", "lastName", "email", "password", "phone", "organizationId", "active", "createdAt", "updatedAt")
+     VALUES 
+     (:id, :firstName, :lastName, :email, :password, :phone, :organizationId, :active, :createdAt, :updatedAt)
+     RETURNING "id"`,
+    {
+      replacements: {
+        id: crypto.randomUUID(),
+        firstName: userData.firstName,
+        lastName: userData.lastName,
+        email: userData.email,
+        password: userData.password, // Store plaintext for now (for testing purposes)
+        phone: faker.phone.number(),
+        organizationId: orgId,
+        active: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      },
+      type: db.sequelize.QueryTypes.INSERT
+    }
+  );
   
-  const user = await db.User.create({
-    firstName: userData.firstName,
-    lastName: userData.lastName,
-    email: userData.email, // Ensure no mailto: prefix
-    password: hashedPassword,
-    phone: faker.phone.number(),
-    organizationId: orgId,
-    active: true
-  });
+  const user = await db.User.findByPk(userId[0][0].id);
   
   // Assign role
   await user.addRole(role);
@@ -695,20 +724,32 @@ async function createUserWithOrg(userData, orgId, role) {
 
 // Helper function to create a random user
 async function createUser(userData = null, orgId = null) {
-  const salt = await bcrypt.genSalt(10);
-  
   if (userData) {
     // If user data is provided, use it (for test users)
-    const hashedPassword = await bcrypt.hash(userData.password, salt);
-    return await db.User.create({
-      firstName: userData.firstName,
-      lastName: userData.lastName,
-      email: userData.email, // Ensure no mailto: prefix
-      password: hashedPassword,
-      phone: faker.phone.number(),
-      organizationId: orgId,
-      active: true
-    });
+    const userId = await db.sequelize.query(
+      `INSERT INTO "Users" 
+       ("id", "firstName", "lastName", "email", "password", "phone", "organizationId", "active", "createdAt", "updatedAt")
+       VALUES 
+       (:id, :firstName, :lastName, :email, :password, :phone, :organizationId, :active, :createdAt, :updatedAt)
+       RETURNING "id"`,
+      {
+        replacements: {
+          id: crypto.randomUUID(),
+          firstName: userData.firstName,
+          lastName: userData.lastName,
+          email: userData.email,
+          password: userData.password, // Store plaintext for testing
+          phone: faker.phone.number(),
+          organizationId: orgId,
+          active: true,
+          createdAt: new Date(),
+          updatedAt: new Date()
+        },
+        type: db.sequelize.QueryTypes.INSERT
+      }
+    );
+    
+    return await db.User.findByPk(userId[0][0].id);
   }
   
   // Otherwise create a random user
@@ -717,17 +758,31 @@ async function createUser(userData = null, orgId = null) {
   // Ensure no mailto: prefix by creating email directly
   const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.com`.replace(/[^a-zA-Z0-9.@]/g, '');
   const password = faker.internet.password({ length: 10 });
-  const hashedPassword = await bcrypt.hash(password, salt);
   
-  return await db.User.create({
-    firstName,
-    lastName,
-    email,
-    password: hashedPassword,
-    phone: faker.phone.number(),
-    organizationId: orgId,
-    active: true
-  });
+  const userId = await db.sequelize.query(
+    `INSERT INTO "Users" 
+     ("id", "firstName", "lastName", "email", "password", "phone", "organizationId", "active", "createdAt", "updatedAt")
+     VALUES 
+     (:id, :firstName, :lastName, :email, :password, :phone, :organizationId, :active, :createdAt, :updatedAt)
+     RETURNING "id"`,
+    {
+      replacements: {
+        id: crypto.randomUUID(),
+        firstName,
+        lastName,
+        email,
+        password, // Store plaintext for testing
+        phone: faker.phone.number(),
+        organizationId: orgId,
+        active: true,
+        createdAt: new Date(),
+        updatedAt: new Date()
+      },
+      type: db.sequelize.QueryTypes.INSERT
+    }
+  );
+  
+  return await db.User.findByPk(userId[0][0].id);
 }
 
 // Helper function to create a random location
@@ -775,6 +830,43 @@ async function createAppointment(patient, therapists, locations) {
   const durationHours = faker.helpers.arrayElement([1, 1.5, 2]);
   const endDate = new Date(startDate.getTime() + durationHours * 60 * 60 * 1000);
   
+  // Get BCBA from patient assignees or primary BCBA
+  let bcba;
+  if (patient.primaryBcbaId) {
+    bcba = await db.User.findByPk(patient.primaryBcbaId);
+  } else {
+    const patientAssignees = await patient.getAssignees({
+      include: [{
+        model: db.Role,
+        where: { name: 'bcba' },
+        through: { attributes: [] }
+      }]
+    });
+    
+    if (patientAssignees && patientAssignees.length > 0) {
+      bcba = faker.helpers.arrayElement(patientAssignees);
+    } else {
+      // If no BCBA assigned, find a random BCBA from the same organization
+      const bcbaRole = await db.Role.findOne({ where: { name: 'bcba' } });
+      const organizationBcbas = await db.User.findAll({
+        include: [{
+          model: db.Role,
+          where: { id: bcbaRole.id },
+          through: { attributes: [] }
+        }],
+        where: { organizationId: patient.organizationId }
+      });
+      
+      if (organizationBcbas.length > 0) {
+        bcba = faker.helpers.arrayElement(organizationBcbas);
+      }
+    }
+  }
+  
+  if (!bcba) {
+    throw new Error('No BCBA found for patient appointment');
+  }
+  
   return await db.Appointment.create({
     startTime: startDate,
     endTime: endDate,
@@ -783,7 +875,10 @@ async function createAppointment(patient, therapists, locations) {
     notes: Math.random() > 0.5 ? faker.lorem.sentence() : null,
     recurring: Math.random() > 0.8,
     recurringPattern: Math.random() > 0.8 ? { frequency: 'weekly', day: startDate.getDay() } : null,
+    excludeWeekends: Math.random() > 0.2, // 80% chance to exclude weekends
+    excludeHolidays: Math.random() > 0.2, // 80% chance to exclude holidays
     therapistId: therapist.id,
+    bcbaId: bcba.id,
     patientId: patient.id,
     locationId: location.id
   });
@@ -800,6 +895,30 @@ async function createSpecificAppointment(patient, therapist, location, baseDate,
   endDate.setHours(startDate.getHours() + Math.floor(durationHours));
   endDate.setMinutes((durationHours % 1) * 60);
   
+  // Get a BCBA (either the primary BCBA or a random assigned BCBA)
+  let bcba;
+  if (patient.primaryBcbaId) {
+    bcba = await db.User.findByPk(patient.primaryBcbaId);
+  } else {
+    const bcbaRole = await db.Role.findOne({ where: { name: 'bcba' } });
+    const bcbas = await db.User.findAll({
+      include: [
+        {
+          model: db.Role,
+          where: { id: bcbaRole.id },
+          through: { attributes: [] }
+        }
+      ],
+      where: { organizationId: patient.organizationId }
+    });
+    
+    if (bcbas.length > 0) {
+      bcba = bcbas[0];  // Use the first BCBA for consistency
+    } else {
+      throw new Error('No BCBA found for test appointment');
+    }
+  }
+  
   return await db.Appointment.create({
     startTime: startDate,
     endTime: endDate,
@@ -807,7 +926,10 @@ async function createSpecificAppointment(patient, therapist, location, baseDate,
     status: 'scheduled',
     notes: faker.lorem.sentence(),
     recurring: false,
+    excludeWeekends: true,
+    excludeHolidays: true,
     therapistId: therapist.id,
+    bcbaId: bcba.id,
     patientId: patient.id,
     locationId: location.id
   });

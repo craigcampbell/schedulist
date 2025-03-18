@@ -52,4 +52,48 @@ router.post(
   bcbaController.assignPatients
 );
 
+// Get available therapists for assignment (org level)
+router.get('/available-therapists', bcbaController.getAvailableTherapists);
+
+// Get available BCBAs for assignment (org level)
+router.get('/available-bcbas', bcbaController.getAvailableBCBAs);
+
+// Get patients with assignments
+router.get('/patients-with-assignments', bcbaController.getPatientsWithAssignments);
+
+// Set primary BCBA for a patient
+router.post(
+  '/set-primary-bcba',
+  [
+    check('patientId', 'Patient ID is required').not().isEmpty(),
+    check('bcbaId', 'BCBA ID is required').not().isEmpty(),
+  ],
+  validate,
+  bcbaController.setPrimaryBCBA
+);
+
+// Update therapist assignment
+router.post(
+  '/update-therapist-assignment',
+  [
+    check('patientId', 'Patient ID is required').not().isEmpty(),
+    check('therapistId', 'Therapist ID is required').not().isEmpty(),
+    check('action', 'Action must be either "assign" or "unassign"').isIn(['assign', 'unassign']),
+  ],
+  validate,
+  bcbaController.updateTherapistAssignment
+);
+
+// Update BCBA assignment
+router.post(
+  '/update-bcba-assignment',
+  [
+    check('patientId', 'Patient ID is required').not().isEmpty(),
+    check('bcbaId', 'BCBA ID is required').not().isEmpty(),
+    check('action', 'Action must be either "assign" or "unassign"').isIn(['assign', 'unassign']),
+  ],
+  validate,
+  bcbaController.updateBCBAAssignment
+);
+
 module.exports = router;

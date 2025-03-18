@@ -33,7 +33,23 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.JSON,
       allowNull: true,
     },
+    excludeWeekends: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+    },
+    excludeHolidays: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+    },
     therapistId: {
+      type: DataTypes.UUID,
+      allowNull: false,
+      references: {
+        model: 'Users',
+        key: 'id'
+      }
+    },
+    bcbaId: {
       type: DataTypes.UUID,
       allowNull: false,
       references: {

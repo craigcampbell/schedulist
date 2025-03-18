@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/auth-context';
+import SignupDefault from './pages/signup/default';
 
 // Layouts
 import AuthLayout from './layouts/AuthLayout';
@@ -74,24 +75,39 @@ const ProtectedRoute = ({ children, requiredRoles = [], requireSubscription = tr
 
 // Main App Component with Router
 function AppRoutes() {
+  const { user, loading } = useAuth();
+  const isAuthenticated = !!user && !loading;
+
   return (
     <Routes>
+      {/* Public Routes */}
+      <Route 
+        path="/" 
+        element={
+          isAuthenticated 
+            ? (user?.roles.includes('admin') 
+                ? <Navigate to="/admin/dashboard" /> 
+                : user?.roles.includes('bcba') 
+                    ? <Navigate to="/bcba/dashboard" /> 
+                    : <Navigate to="/therapist/schedule" />)
+            : <SignupDefault />
+        } 
+      />
+      
       {/* Auth Routes */}
       <Route element={<AuthLayout />}>
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<OrganizationSignupPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
-        <Route path="/signup" element={<OrganizationSignupPage />} />
         <Route path="/subscription-required" element={<SubscriptionRequiredPage />} />
       </Route>
       
-      {/* Dashboard Routes */}
       <Route element={
         <ProtectedRoute>
           <DashboardLayout />
         </ProtectedRoute>
       }>
-        {/* Therapist Routes */}
         <Route path="/therapist/schedule" element={
           <ProtectedRoute requiredRoles={['therapist', 'bcba']}>
             <TherapistSchedulePage />
@@ -108,7 +124,6 @@ function AppRoutes() {
           </ProtectedRoute>
         } />
         
-        {/* BCBA Routes */}
         <Route path="/bcba/dashboard" element={
           <ProtectedRoute requiredRoles={['bcba']}>
             <BCBADashboardPage />
@@ -135,7 +150,6 @@ function AppRoutes() {
           </ProtectedRoute>
         } />
         
-        {/* Admin Routes */}
         <Route path="/admin/dashboard" element={
           <ProtectedRoute requiredRoles={['admin']} requireSubscription={false}>
             <AdminDashboardPage />
@@ -162,7 +176,6 @@ function AppRoutes() {
           </ProtectedRoute>
         } />
         
-        {/* Common Routes */}
         <Route path="/profile" element={
           <ProtectedRoute requireSubscription={false}>
             <ProfilePage />
@@ -170,10 +183,6 @@ function AppRoutes() {
         } />
       </Route>
       
-      {/* Redirect root to appropriate dashboard based on role */}
-      <Route path="/" element={<Navigate to="/login" replace />} />
-      
-      {/* 404 Route */}
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

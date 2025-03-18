@@ -101,8 +101,14 @@ const login = async (req, res) => {
       isPasswordValid = true;
       console.log('[TEST MODE] Using plain text password match');
     } else {
-      // Use normal password validation
-      isPasswordValid = await user.isValidPassword(password);
+      try {
+        // Use normal password validation
+        isPasswordValid = await user.isValidPassword(password);
+        console.log('[AUTH] Password validation result:', isPasswordValid);
+      } catch (err) {
+        console.error('[AUTH] Error validating password:', err);
+        isPasswordValid = false;
+      }
     }
     
     if (!isPasswordValid) {

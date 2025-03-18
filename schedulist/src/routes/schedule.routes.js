@@ -27,6 +27,18 @@ router.get(
   scheduleController.getPatientSchedule
 );
 
+// Get next available slot for a therapist
+router.get(
+  '/next-available-slot',
+  isBCBA,
+  [
+    check('therapistId', 'Therapist ID is required').not().isEmpty(),
+    check('locationId', 'Location ID is required').not().isEmpty(),
+  ],
+  validate,
+  scheduleController.getNextAvailableSlot
+);
+
 // Create a new appointment (BCBA or admin only)
 router.post(
   '/',
@@ -35,8 +47,19 @@ router.post(
     check('patientId', 'Patient ID is required').not().isEmpty(),
     check('therapistId', 'Therapist ID is required').not().isEmpty(),
     check('locationId', 'Location ID is required').not().isEmpty(),
-    check('startTime', 'Start time is required').isISO8601(),
-    check('endTime', 'End time is required').isISO8601(),
+    // Skip start/end time validation when using next available slot
+    check('startTime').custom((value, { req }) => {
+      if (!req.body.useNextAvailableSlot && !value) {
+        throw new Error('Start time is required when not using next available slot');
+      }
+      return true;
+    }),
+    check('endTime').custom((value, { req }) => {
+      if (!req.body.useNextAvailableSlot && !value) {
+        throw new Error('End time is required when not using next available slot');
+      }
+      return true;
+    }),
   ],
   validate,
   scheduleController.createAppointment

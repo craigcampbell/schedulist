@@ -56,8 +56,15 @@ db.Appointment.belongsTo(db.Patient);
 db.User.hasMany(db.Appointment, { as: 'TherapistAppointments', foreignKey: 'therapistId' });
 db.Appointment.belongsTo(db.User, { as: 'Therapist', foreignKey: 'therapistId' });
 
+db.User.hasMany(db.Appointment, { as: 'BCBAAppointments', foreignKey: 'bcbaId' });
+db.Appointment.belongsTo(db.User, { as: 'BCBA', foreignKey: 'bcbaId' });
+
 db.Location.hasMany(db.Appointment);
 db.Appointment.belongsTo(db.Location);
+
+// Primary BCBA relationship with Patient
+db.User.hasMany(db.Patient, { as: 'PrimaryPatients', foreignKey: 'primaryBcbaId' });
+db.Patient.belongsTo(db.User, { as: 'PrimaryBCBA', foreignKey: 'primaryBcbaId' });
 
 // Note relationships
 db.Patient.hasMany(db.Note);

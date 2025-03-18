@@ -33,6 +33,16 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       defaultValue: true,
     },
+    workingHoursStart: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: '08:00',  // Default 8 AM
+    },
+    workingHoursEnd: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: '17:00',  // Default 5 PM
+    },
     organizationId: {
       type: DataTypes.UUID,
       allowNull: true,

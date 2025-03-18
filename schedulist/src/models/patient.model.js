@@ -54,6 +54,14 @@ module.exports = (sequelize, DataTypes) => {
         key: 'id'
       }
     },
+    primaryBcbaId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'Users',
+        key: 'id'
+      }
+    },
     
     // Virtual fields that get decrypted
     firstName: {

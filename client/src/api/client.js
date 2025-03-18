@@ -45,10 +45,30 @@ apiClient.interceptors.response.use(
       status: error.response?.status
     });
     
-    // If request returns 401 Unauthorized, redirect to login
-    if (error.response && error.response.status === 401) {
+    // Handle network errors or server not available
+    if (!error.response) {
+      console.error('Network error - no response from server');
+      error.response = { 
+        data: { 
+          message: 'Unable to connect to server. Please check your network connection or try again later.' 
+        } 
+      };
+    } else {
+      console.error('Server error details:', {
+        status: error.response.status,
+        data: error.response.data
+      });
+    }
+    
+    // If request returns 401 Unauthorized, only redirect to login if not already on login page
+    if (error.response && error.response.status === 401 && !window.location.pathname.includes('/login')) {
       localStorage.removeItem('token');
-      window.location.href = '/login';
+      // Use navigate instead of direct window.location to prevent reload
+      if (window.history) {
+        window.history.pushState({}, '', '/login');
+      } else {
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { format, addDays, subDays, startOfDay, isSameDay, parseISO } from 'date-fns';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { format, addDays, subDays, startOfDay, isSameDay, parseISO, addMinutes } from 'date-fns';
 import { 
   Calendar, 
   ChevronLeft, 
@@ -8,11 +8,19 @@ import {
   Clock, 
   User,
   Filter,
-  Plus 
+  Plus,
+  Check,
+  X,
+  Info
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { getSchedule } from '../../api/schedule';
+import { 
+  getSchedule, 
+  createAppointment, 
+  createAppointmentNextSlot, 
+  findNextAvailableSlot 
+} from '../../api/schedule';
 import { getTherapists } from '../../api/bcba';
 import { getPatients } from '../../api/patients';
 import { getLocations } from '../../api/admin';
@@ -27,6 +35,219 @@ export default function BCBASchedulePage() {
   const [showFilters, setShowFilters] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState(null);
   const [showAppointmentForm, setShowAppointmentForm] = useState(false);
+  const [formError, setFormError] = useState(null);
+  const [isCheckingAvailability, setIsCheckingAvailability] = useState(false);
+  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+  
+  // Form state for new appointment
+  const [formState, setFormState] = useState({
+    patientId: '',
+    therapistId: '',
+    bcbaId: '',
+    locationId: '',
+    date: format(new Date(), 'yyyy-MM-dd'),
+    startTime: '08:00',
+    endTime: '08:30',
+    title: '',
+    notes: '',
+    useNextAvailableSlot: false,
+    durationMinutes: 30,
+    preferredDate: '',
+    nextAvailablePreview: null,
+    recurring: false,
+    recurringType: 'weekly',
+    recurringPattern: {
+      type: 'weekly',
+      endDate: ''
+    },
+    recurringEndDate: '',
+    excludeWeekends: true,
+    excludeHolidays: true
+  });
+  
+  // QueryClient for cache invalidation
+  const queryClient = useQueryClient();
+  
+  // Reset form when dialog is toggled
+  useEffect(() => {
+    if (showAppointmentForm) {
+      setFormState({
+        patientId: '',
+        therapistId: '',
+        bcbaId: '',
+        locationId: '',
+        date: format(new Date(), 'yyyy-MM-dd'),
+        startTime: '08:00',
+        endTime: '08:30',
+        title: '',
+        notes: '',
+        useNextAvailableSlot: false,
+        durationMinutes: 30,
+        preferredDate: '',
+        nextAvailablePreview: null,
+        recurring: false,
+        recurringType: 'weekly',
+        recurringPattern: {
+          type: 'weekly',
+          endDate: ''
+        },
+        recurringEndDate: '',
+        excludeWeekends: true,
+        excludeHolidays: true
+      });
+      setFormError(null);
+    }
+  }, [showAppointmentForm]);
+  
+  // Check next available slot
+  const handleCheckNextAvailable = async () => {
+    if (!formState.therapistId || !formState.locationId) {
+      setFormError('Please select a therapist and location first');
+      return;
+    }
+    
+    setIsCheckingAvailability(true);
+    setFormError(null);
+    
+    try {
+      const slot = await findNextAvailableSlot(
+        formState.therapistId,
+        formState.locationId,
+        formState.preferredDate,
+        formState.durationMinutes
+      );
+      
+      setFormState({
+        ...formState,
+        nextAvailablePreview: slot
+      });
+    } catch (error) {
+      setFormError(error.response?.data?.message || 'Failed to find available slot');
+    } finally {
+      setIsCheckingAvailability(false);
+    }
+  };
+  
+  // Create appointment mutation
+  const createAppointmentMutation = useMutation({
+    mutationFn: createAppointment,
+    onSuccess: () => {
+      // Invalidate and refetch the schedule data
+      queryClient.invalidateQueries(['bcbaSchedule']);
+      setShowAppointmentForm(false);
+    }
+  });
+  
+  // Create appointment with next slot mutation
+  const createAppointmentNextSlotMutation = useMutation({
+    mutationFn: createAppointmentNextSlot,
+    onSuccess: () => {
+      // Invalidate and refetch the schedule data
+      queryClient.invalidateQueries(['bcbaSchedule']);
+      setShowAppointmentForm(false);
+    }
+  });
+  
+  // Handle appointment form submission
+  const handleSubmitAppointment = async () => {
+    // Validate form
+    if (!formState.patientId) {
+      setFormError('Please select a patient');
+      return;
+    }
+    
+    if (!formState.therapistId) {
+      setFormError('Please select a therapist');
+      return;
+    }
+    
+    if (!formState.bcbaId) {
+      setFormError('Please select a BCBA');
+      return;
+    }
+    
+    if (!formState.locationId) {
+      setFormError('Please select a location');
+      return;
+    }
+    
+    if (!formState.useNextAvailableSlot) {
+      if (!formState.date || !formState.startTime || !formState.endTime) {
+        setFormError('Please select date and time');
+        return;
+      }
+      
+      // Validate that end time is after start time
+      const startDateTime = new Date(`${formState.date}T${formState.startTime}`);
+      const endDateTime = new Date(`${formState.date}T${formState.endTime}`);
+      
+      if (endDateTime <= startDateTime) {
+        setFormError('End time must be after start time');
+        return;
+      }
+      
+      // Validate minimum session duration (30 minutes)
+      const durationMs = endDateTime - startDateTime;
+      const durationMinutes = durationMs / (1000 * 60);
+      
+      if (durationMinutes < 30) {
+        setFormError('Session must be at least 30 minutes long');
+        return;
+      }
+    }
+    
+    // If recurring, validate end date
+    if (formState.recurring && !formState.recurringEndDate) {
+      setFormError('Please select an end date for recurring appointments');
+      return;
+    }
+    
+    setIsSubmittingForm(true);
+    setFormError(null);
+    
+    try {
+      if (formState.useNextAvailableSlot) {
+        // Use next available slot
+        await createAppointmentNextSlotMutation.mutateAsync({
+          patientId: formState.patientId,
+          therapistId: formState.therapistId,
+          bcbaId: formState.bcbaId,
+          locationId: formState.locationId,
+          durationMinutes: formState.durationMinutes,
+          preferredDate: formState.preferredDate || undefined,
+          title: formState.title || undefined,
+          notes: formState.notes || undefined,
+          recurring: formState.recurring,
+          recurringPattern: formState.recurring ? formState.recurringPattern : undefined,
+          excludeWeekends: formState.excludeWeekends,
+          excludeHolidays: formState.excludeHolidays
+        });
+      } else {
+        // Use specified time
+        const startDateTime = new Date(`${formState.date}T${formState.startTime}`);
+        const endDateTime = new Date(`${formState.date}T${formState.endTime}`);
+        
+        await createAppointmentMutation.mutateAsync({
+          patientId: formState.patientId,
+          therapistId: formState.therapistId,
+          bcbaId: formState.bcbaId,
+          locationId: formState.locationId,
+          startTime: startDateTime.toISOString(),
+          endTime: endDateTime.toISOString(),
+          title: formState.title || undefined,
+          notes: formState.notes || undefined,
+          recurring: formState.recurring,
+          recurringPattern: formState.recurring ? formState.recurringPattern : undefined,
+          excludeWeekends: formState.excludeWeekends,
+          excludeHolidays: formState.excludeHolidays
+        });
+      }
+    } catch (error) {
+      setFormError(error.response?.data?.message || 'Failed to create appointment');
+    } finally {
+      setIsSubmittingForm(false);
+    }
+  };
   
   // Generate time slots from 8 AM to 6 PM with 15-minute intervals
   const timeSlots = generateTimeSlots(8, 18, 15);
@@ -314,117 +535,181 @@ export default function BCBASchedulePage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Therapist View */}
             <div className="border rounded-lg overflow-hidden">
-              <div className="bg-blue-50 dark:bg-blue-900/20 p-3 border-b">
+              <div className="bg-blue-50 dark:bg-blue-900/20 p-3 border-b flex justify-between items-center">
                 <h3 className="font-semibold">Therapist Schedule</h3>
+                <Button variant="ghost" size="sm" onClick={toggleAppointmentForm}>
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add
+                </Button>
               </div>
               <div className="overflow-x-auto">
-                <div className="schedule-grid min-w-[600px]">
-                  {/* Time column */}
-                  <div className="border-r border-gray-200 dark:border-gray-700">
-                    {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
-                      <div key={i} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
-                        {format(time, 'h a')}
-                      </div>
-                    ))}
-                  </div>
-                  
-                  {/* Appointments column */}
-                  <div className="relative">
-                    {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
-                      <div key={i} className="h-24 border-b border-gray-200 dark:border-gray-700">
-                        {/* 15-minute lines */}
-                        <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 24}px` }}></div>
-                        <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 48}px` }}></div>
-                        <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 72}px` }}></div>
-                      </div>
-                    ))}
+                {Object.values(therapistGroups).length > 0 ? (
+                  <div className="schedule-grid min-w-[600px]">
+                    {/* Time column */}
+                    <div className="border-r border-gray-200 dark:border-gray-700">
+                      {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
+                        <div key={i} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
+                          {format(time, 'h a')}
+                        </div>
+                      ))}
+                    </div>
                     
-                    {/* Appointments by therapist */}
-                    {Object.values(therapistGroups).map((group) => (
-                      group.appointments.map((appointment) => {
-                        const style = calculateAppointmentStyle(appointment, 96); // 24px per hour * 4 = 96
-                        
-                        return (
-                          <div
-                            key={appointment.id}
-                            className="appointment cursor-pointer absolute p-2 border-l-4 border-blue-500 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
-                            style={{
-                              ...style,
-                              left: '4px',
-                              right: '4px',
-                            }}
-                            onClick={() => handleAppointmentClick(appointment)}
-                          >
-                            <div className="text-xs font-medium">
-                              {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
+                    {/* Appointments column */}
+                    <div className="relative">
+                      {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
+                        <div key={i} className="h-24 border-b border-gray-200 dark:border-gray-700">
+                          {/* 15-minute lines */}
+                          <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 24}px` }}></div>
+                          <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 48}px` }}></div>
+                          <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 72}px` }}></div>
+                        </div>
+                      ))}
+                      
+                      {/* Appointments by therapist */}
+                      {Object.values(therapistGroups).map((group) => (
+                        group.appointments.map((appointment) => {
+                          const style = calculateAppointmentStyle(appointment, 96); // 24px per hour * 4 = 96
+                          
+                          return (
+                            <div
+                              key={appointment.id}
+                              className="appointment cursor-pointer absolute p-2 border-l-4 border-blue-500 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
+                              style={{
+                                ...style,
+                                left: '4px',
+                                right: '4px',
+                              }}
+                              onClick={() => handleAppointmentClick(appointment)}
+                            >
+                              <div className="text-xs font-medium">
+                                {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
+                              </div>
+                              <div className="font-medium truncate">
+                                {appointment.therapist?.name}: {appointment.patient?.firstName} {appointment.patient?.lastInitial}.
+                              </div>
+                              {appointment.bcba && (
+                                <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
+                                  BCBA: {appointment.bcba.name}
+                                </div>
+                              )}
                             </div>
-                            <div className="font-medium truncate">
-                              {appointment.therapist.name}: {appointment.patient.firstName} {appointment.patient.lastInitial}.
-                            </div>
-                          </div>
-                        );
-                      })
-                    ))}
+                          );
+                        })
+                      ))}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+                    <Clock className="h-12 w-12 mx-auto mb-4 opacity-30" />
+                    <p className="mb-2">No therapist appointments scheduled for today</p>
+                    <p className="text-sm mb-4">
+                      {scheduleData?.locationWorkingHours ? (
+                        <>Working hours: {scheduleData.locationWorkingHours.start} - {scheduleData.locationWorkingHours.end}</>
+                      ) : (
+                        <>Default hours: 8:00 AM - 5:00 PM</>
+                      )}
+                    </p>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={toggleAppointmentForm}
+                      className="mx-auto"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add New Appointment
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
             
             {/* Patient View */}
             <div className="border rounded-lg overflow-hidden">
-              <div className="bg-green-50 dark:bg-green-900/20 p-3 border-b">
+              <div className="bg-green-50 dark:bg-green-900/20 p-3 border-b flex justify-between items-center">
                 <h3 className="font-semibold">Patient Schedule</h3>
+                <Button variant="ghost" size="sm" onClick={toggleAppointmentForm}>
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add
+                </Button>
               </div>
               <div className="overflow-x-auto">
-                <div className="schedule-grid min-w-[600px]">
-                  {/* Time column */}
-                  <div className="border-r border-gray-200 dark:border-gray-700">
-                    {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
-                      <div key={i} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
-                        {format(time, 'h a')}
-                      </div>
-                    ))}
-                  </div>
-                  
-                  {/* Appointments column */}
-                  <div className="relative">
-                    {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
-                      <div key={i} className="h-24 border-b border-gray-200 dark:border-gray-700">
-                        {/* 15-minute lines */}
-                        <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 24}px` }}></div>
-                        <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 48}px` }}></div>
-                        <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 72}px` }}></div>
-                      </div>
-                    ))}
+                {Object.values(patientGroups).length > 0 ? (
+                  <div className="schedule-grid min-w-[600px]">
+                    {/* Time column */}
+                    <div className="border-r border-gray-200 dark:border-gray-700">
+                      {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
+                        <div key={i} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
+                          {format(time, 'h a')}
+                        </div>
+                      ))}
+                    </div>
                     
-                    {/* Appointments by patient */}
-                    {Object.values(patientGroups).map((group) => (
-                      group.appointments.map((appointment) => {
-                        const style = calculateAppointmentStyle(appointment, 96); // 24px per hour * 4 = 96
-                        
-                        return (
-                          <div
-                            key={appointment.id}
-                            className="appointment cursor-pointer absolute p-2 border-l-4 border-green-500 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
-                            style={{
-                              ...style,
-                              left: '4px',
-                              right: '4px',
-                            }}
-                            onClick={() => handleAppointmentClick(appointment)}
-                          >
-                            <div className="text-xs font-medium">
-                              {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
+                    {/* Appointments column */}
+                    <div className="relative">
+                      {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
+                        <div key={i} className="h-24 border-b border-gray-200 dark:border-gray-700">
+                          {/* 15-minute lines */}
+                          <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 24}px` }}></div>
+                          <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 48}px` }}></div>
+                          <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 72}px` }}></div>
+                        </div>
+                      ))}
+                      
+                      {/* Appointments by patient */}
+                      {Object.values(patientGroups).map((group) => (
+                        group.appointments.map((appointment) => {
+                          const style = calculateAppointmentStyle(appointment, 96); // 24px per hour * 4 = 96
+                          
+                          return (
+                            <div
+                              key={appointment.id}
+                              className="appointment cursor-pointer absolute p-2 border-l-4 border-green-500 bg-green-50 dark:bg-green-900/20 hover:bg-green-100 dark:hover:bg-green-900/30 transition-colors"
+                              style={{
+                                ...style,
+                                left: '4px',
+                                right: '4px',
+                              }}
+                              onClick={() => handleAppointmentClick(appointment)}
+                            >
+                              <div className="text-xs font-medium">
+                                {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
+                              </div>
+                              <div className="font-medium truncate">
+                                {appointment.patient?.firstName} {appointment.patient?.lastInitial}. with {appointment.therapist?.name}
+                              </div>
+                              {appointment.bcba && (
+                                <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
+                                  BCBA: {appointment.bcba.name}
+                                </div>
+                              )}
                             </div>
-                            <div className="font-medium truncate">
-                              {appointment.patient.firstName} {appointment.patient.lastInitial}. with {appointment.therapist.name}
-                            </div>
-                          </div>
-                        );
-                      })
-                    ))}
+                          );
+                        })
+                      ))}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+                    <Calendar className="h-12 w-12 mx-auto mb-4 opacity-30" />
+                    <p className="mb-2">No patient appointments scheduled for today</p>
+                    <p className="text-sm mb-4">
+                      {scheduleData?.locationWorkingHours ? (
+                        <>Working hours: {scheduleData.locationWorkingHours.start} - {scheduleData.locationWorkingHours.end}</>
+                      ) : (
+                        <>Default hours: 8:00 AM - 5:00 PM</>
+                      )}
+                    </p>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      onClick={toggleAppointmentForm}
+                      className="mx-auto"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add New Appointment
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -560,23 +845,316 @@ export default function BCBASchedulePage() {
         </div>
       )}
 
-      {/* New Appointment Form (placeholder - will need to be fully implemented) */}
+      {/* New Appointment Form */}
       {showAppointmentForm && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-6">
             <div className="flex justify-between items-start mb-4">
               <h2 className="text-xl font-bold">New Appointment</h2>
               <Button variant="ghost" size="sm" onClick={toggleAppointmentForm}>
-                ✕
+                <X className="h-4 w-4" />
               </Button>
             </div>
             
-            <div className="space-y-4">
-              {/* This form would be implemented with react-hook-form */}
-              <p className="text-center text-gray-500 dark:text-gray-400">
-                Appointment form would be implemented here with patient selection, therapist selection,
-                date/time pickers, location selection, and other necessary fields.
-              </p>
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Patient Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Patient *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={formState.patientId || ''}
+                    onChange={(e) => setFormState({...formState, patientId: e.target.value})}
+                    required
+                  >
+                    <option value="">Select a patient</option>
+                    {patients?.map(patient => (
+                      <option key={patient.id} value={patient.id}>
+                        {patient.firstName} {patient.lastName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Therapist Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Therapist *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={formState.therapistId || ''}
+                    onChange={(e) => setFormState({...formState, therapistId: e.target.value})}
+                    required
+                  >
+                    <option value="">Select a therapist</option>
+                    {therapists?.map(therapist => (
+                      <option key={therapist.id} value={therapist.id}>
+                        {therapist.firstName} {therapist.lastName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* BCBA Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">BCBA *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={formState.bcbaId || ''}
+                    onChange={(e) => setFormState({...formState, bcbaId: e.target.value})}
+                    required
+                  >
+                    <option value="">Select a BCBA</option>
+                    {therapists?.filter(t => t.roles.includes('bcba')).map(bcba => (
+                      <option key={bcba.id} value={bcba.id}>
+                        {bcba.firstName} {bcba.lastName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* Location Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Location *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={formState.locationId || ''}
+                    onChange={(e) => setFormState({...formState, locationId: e.target.value})}
+                    required
+                  >
+                    <option value="">Select a location</option>
+                    {locations?.map(location => (
+                      <option key={location.id} value={location.id}>
+                        {location.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              {/* Scheduling Options */}
+              <div>
+                <div className="flex items-center mb-2">
+                  <input
+                    type="checkbox"
+                    id="useNextAvailable"
+                    className="mr-2"
+                    checked={formState.useNextAvailableSlot}
+                    onChange={(e) => setFormState({...formState, useNextAvailableSlot: e.target.checked})}
+                  />
+                  <label htmlFor="useNextAvailable" className="font-medium">
+                    Use next available time slot
+                  </label>
+                </div>
+                
+                {formState.useNextAvailableSlot ? (
+                  <div className="pl-6 mt-2 space-y-2">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Duration (minutes)</label>
+                      <select 
+                        className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                        value={formState.durationMinutes || 30}
+                        onChange={(e) => setFormState({...formState, durationMinutes: parseInt(e.target.value)})}
+                      >
+                        <option value="30">30 minutes</option>
+                        <option value="45">45 minutes</option>
+                        <option value="60">60 minutes</option>
+                        <option value="90">90 minutes</option>
+                        <option value="120">120 minutes</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Preferred Date (optional)</label>
+                      <input
+                        type="date"
+                        className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                        value={formState.preferredDate || ''}
+                        onChange={(e) => setFormState({...formState, preferredDate: e.target.value})}
+                      />
+                    </div>
+                    
+                    {formState.nextAvailablePreview && (
+                      <div className="bg-blue-50 dark:bg-blue-900/20 p-3 rounded-md">
+                        <p className="text-sm font-medium">Next available slot would be:</p>
+                        <p className="text-sm">
+                          {format(parseISO(formState.nextAvailablePreview.startTime), 'PPPP')} 
+                          {' '}at{' '}
+                          {formatTime(formState.nextAvailablePreview.startTime)} - {formatTime(formState.nextAvailablePreview.endTime)}
+                        </p>
+                      </div>
+                    )}
+                    
+                    {formState.therapistId && formState.locationId && (
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={handleCheckNextAvailable}
+                        disabled={isCheckingAvailability}
+                      >
+                        {isCheckingAvailability ? 'Checking...' : 'Check Availability'}
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Date *</label>
+                      <input
+                        type="date"
+                        className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                        value={formState.date || format(new Date(), 'yyyy-MM-dd')}
+                        onChange={(e) => setFormState({...formState, date: e.target.value})}
+                        required
+                      />
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-sm font-medium mb-1">Start Time *</label>
+                        <input
+                          type="time"
+                          className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                          value={formState.startTime || '08:00'}
+                          onChange={(e) => setFormState({...formState, startTime: e.target.value})}
+                          required
+                        />
+                      </div>
+                      
+                      <div>
+                        <label className="block text-sm font-medium mb-1">End Time *</label>
+                        <input
+                          type="time"
+                          className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                          value={formState.endTime || '08:30'}
+                          onChange={(e) => setFormState({...formState, endTime: e.target.value})}
+                          required
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Recurring Options */}
+              <div>
+                <div className="flex items-center mb-2">
+                  <input
+                    type="checkbox"
+                    id="recurring"
+                    className="mr-2"
+                    checked={formState.recurring}
+                    onChange={(e) => setFormState({...formState, recurring: e.target.checked})}
+                  />
+                  <label htmlFor="recurring" className="font-medium">
+                    Recurring appointment
+                  </label>
+                </div>
+                
+                {formState.recurring && (
+                  <div className="pl-6 mt-2 space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium mb-1">Recurrence Pattern</label>
+                      <select 
+                        className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                        value={formState.recurringType || 'weekly'}
+                        onChange={(e) => {
+                          const recurringPattern = {
+                            ...formState.recurringPattern,
+                            type: e.target.value
+                          };
+                          setFormState({
+                            ...formState, 
+                            recurringType: e.target.value,
+                            recurringPattern
+                          });
+                        }}
+                      >
+                        <option value="daily">Daily</option>
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="block text-sm font-medium mb-1">End Date</label>
+                      <input
+                        type="date"
+                        className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                        value={formState.recurringEndDate || ''}
+                        onChange={(e) => {
+                          const recurringPattern = {
+                            ...formState.recurringPattern,
+                            endDate: e.target.value
+                          };
+                          setFormState({
+                            ...formState, 
+                            recurringEndDate: e.target.value,
+                            recurringPattern
+                          });
+                        }}
+                        min={new Date().toISOString().split('T')[0]}
+                      />
+                    </div>
+                    
+                    <div className="flex space-x-4">
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          id="excludeWeekends"
+                          className="mr-2"
+                          checked={formState.excludeWeekends}
+                          onChange={(e) => setFormState({...formState, excludeWeekends: e.target.checked})}
+                        />
+                        <label htmlFor="excludeWeekends" className="text-sm">
+                          Exclude weekends
+                        </label>
+                      </div>
+                      
+                      <div className="flex items-center">
+                        <input
+                          type="checkbox"
+                          id="excludeHolidays"
+                          className="mr-2"
+                          checked={formState.excludeHolidays}
+                          onChange={(e) => setFormState({...formState, excludeHolidays: e.target.checked})}
+                        />
+                        <label htmlFor="excludeHolidays" className="text-sm">
+                          Exclude holidays
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Additional Fields */}
+              <div>
+                <label className="block text-sm font-medium mb-1">Title (optional)</label>
+                <input
+                  type="text"
+                  className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                  value={formState.title || ''}
+                  onChange={(e) => setFormState({...formState, title: e.target.value})}
+                  placeholder="Session title"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-1">Notes (optional)</label>
+                <textarea
+                  className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                  rows="3"
+                  value={formState.notes || ''}
+                  onChange={(e) => setFormState({...formState, notes: e.target.value})}
+                  placeholder="Add any notes about this appointment"
+                ></textarea>
+              </div>
+              
+              {formError && (
+                <div className="p-3 bg-red-50 text-red-800 dark:bg-red-900/20 dark:text-red-300 rounded-md">
+                  <p className="text-sm">{formError}</p>
+                </div>
+              )}
               
               <div className="flex justify-end space-x-2 pt-4">
                 <Button variant="outline" onClick={toggleAppointmentForm}>
@@ -584,12 +1162,10 @@ export default function BCBASchedulePage() {
                 </Button>
                 <Button 
                   variant="default" 
-                  onClick={() => {
-                    // Submit form logic would go here
-                    toggleAppointmentForm();
-                  }}
+                  onClick={handleSubmitAppointment}
+                  disabled={isSubmittingForm}
                 >
-                  Create Appointment
+                  {isSubmittingForm ? 'Creating...' : 'Create Appointment'}
                 </Button>
               </div>
             </div>
