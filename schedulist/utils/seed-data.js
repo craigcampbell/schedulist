@@ -690,35 +690,19 @@ const seedDatabase = async () => {
 
 // Helper function to create a user with organization and role
 async function createUserWithOrg(userData, orgId, role) {
-  // Directly insert the user with raw SQL to bypass Sequelize hooks that would hash the password again
-  const userId = await db.sequelize.query(
-    `INSERT INTO "Users" 
-     ("id", "firstName", "lastName", "email", "password", "phone", "organizationId", "active", "createdAt", "updatedAt")
-     VALUES 
-     (:id, :firstName, :lastName, :email, :password, :phone, :organizationId, :active, :createdAt, :updatedAt)
-     RETURNING "id"`,
-    {
-      replacements: {
-        id: crypto.randomUUID(),
-        firstName: userData.firstName,
-        lastName: userData.lastName,
-        email: userData.email,
-        password: userData.password, // Store plaintext for now (for testing purposes)
-        phone: faker.phone.number(),
-        organizationId: orgId,
-        active: true,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      },
-      type: db.sequelize.QueryTypes.INSERT
-    }
-  );
-  
-  const user = await db.User.findByPk(userId[0][0].id);
-  
+  const user = await db.User.create({
+    firstName: userData.firstName,
+    lastName: userData.lastName,
+    email: userData.email, // Ensure no mailto: prefix
+    password: userData.password, // Pass the plain text password
+    phone: faker.phone.number(),
+    organizationId: orgId,
+    active: true
+  });
+
   // Assign role
   await user.addRole(role);
-  
+
   return user;
 }
 
@@ -726,63 +710,33 @@ async function createUserWithOrg(userData, orgId, role) {
 async function createUser(userData = null, orgId = null) {
   if (userData) {
     // If user data is provided, use it (for test users)
-    const userId = await db.sequelize.query(
-      `INSERT INTO "Users" 
-       ("id", "firstName", "lastName", "email", "password", "phone", "organizationId", "active", "createdAt", "updatedAt")
-       VALUES 
-       (:id, :firstName, :lastName, :email, :password, :phone, :organizationId, :active, :createdAt, :updatedAt)
-       RETURNING "id"`,
-      {
-        replacements: {
-          id: crypto.randomUUID(),
-          firstName: userData.firstName,
-          lastName: userData.lastName,
-          email: userData.email,
-          password: userData.password, // Store plaintext for testing
-          phone: faker.phone.number(),
-          organizationId: orgId,
-          active: true,
-          createdAt: new Date(),
-          updatedAt: new Date()
-        },
-        type: db.sequelize.QueryTypes.INSERT
-      }
-    );
-    
-    return await db.User.findByPk(userId[0][0].id);
+    return await db.User.create({
+      firstName: userData.firstName,
+      lastName: userData.lastName,
+      email: userData.email, // Ensure no mailto: prefix
+      password: userData.password, // Pass the plain text password
+      phone: faker.phone.number(),
+      organizationId: orgId,
+      active: true
+    });
   }
-  
+
   // Otherwise create a random user
   const firstName = faker.person.firstName();
   const lastName = faker.person.lastName();
   // Ensure no mailto: prefix by creating email directly
   const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.com`.replace(/[^a-zA-Z0-9.@]/g, '');
   const password = faker.internet.password({ length: 10 });
-  
-  const userId = await db.sequelize.query(
-    `INSERT INTO "Users" 
-     ("id", "firstName", "lastName", "email", "password", "phone", "organizationId", "active", "createdAt", "updatedAt")
-     VALUES 
-     (:id, :firstName, :lastName, :email, :password, :phone, :organizationId, :active, :createdAt, :updatedAt)
-     RETURNING "id"`,
-    {
-      replacements: {
-        id: crypto.randomUUID(),
-        firstName,
-        lastName,
-        email,
-        password, // Store plaintext for testing
-        phone: faker.phone.number(),
-        organizationId: orgId,
-        active: true,
-        createdAt: new Date(),
-        updatedAt: new Date()
-      },
-      type: db.sequelize.QueryTypes.INSERT
-    }
-  );
-  
-  return await db.User.findByPk(userId[0][0].id);
+
+  return await db.User.create({
+    firstName,
+    lastName,
+    email,
+    password: password, // Pass the plain text password
+    phone: faker.phone.number(),
+    organizationId: orgId,
+    active: true
+  });
 }
 
 // Helper function to create a random location

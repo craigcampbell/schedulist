@@ -93,22 +93,14 @@ const login = async (req, res) => {
       return res.status(403).json({ message: 'Account is inactive. Please contact an administrator.' });
     }
     
-    // Verify password
-    let isPasswordValid;
-    
-    // For testing purposes - support plain text passwords
-    if (password === user.password) {
-      isPasswordValid = true;
-      console.log('[TEST MODE] Using plain text password match');
-    } else {
-      try {
-        // Use normal password validation
-        isPasswordValid = await user.isValidPassword(password);
-        console.log('[AUTH] Password validation result:', isPasswordValid);
-      } catch (err) {
-        console.error('[AUTH] Error validating password:', err);
-        isPasswordValid = false;
-      }
+    // Verify password using the model's method
+    let isPasswordValid = false;
+    try {
+      isPasswordValid = await user.isValidPassword(password);
+      console.log('[AUTH] Password validation result:', isPasswordValid);
+    } catch (err) {
+      console.error('[AUTH] Error validating password:', err);
+      isPasswordValid = false;
     }
     
     if (!isPasswordValid) {
@@ -167,6 +159,7 @@ const login = async (req, res) => {
     });
     
   } catch (error) {
+    console.error('Login error:', error); // Add detailed logging
     return res.status(500).json({ message: 'Error logging in', error: error.message });
   }
 };
