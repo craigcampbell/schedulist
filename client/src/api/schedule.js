@@ -1,13 +1,14 @@
 import apiClient from './client';
 
 // Get schedule with various filtering options
-export const getSchedule = async (view = 'daily', date, locationId, therapistId) => {
+export const getSchedule = async (view = 'daily', date, locationId, therapistId, bcbaId) => {
   const response = await apiClient.get('/schedule', {
     params: {
       view,
       date,
       locationId,
-      therapistId
+      therapistId,
+      bcbaId
     }
   });
   return response.data;
@@ -27,6 +28,32 @@ export const getPatientSchedule = async (patientId, limit, includePast) => {
 // Create a new appointment
 export const createAppointment = async (appointmentData) => {
   const response = await apiClient.post('/schedule', appointmentData);
+  return response.data;
+};
+
+// Find next available slot for a therapist
+export const findNextAvailableSlot = async (therapistId, locationId, preferredDate = null, durationMinutes = 30) => {
+  const params = {
+    therapistId,
+    locationId,
+    durationMinutes
+  };
+  
+  if (preferredDate) {
+    params.preferredDate = preferredDate;
+  }
+  
+  const response = await apiClient.get('/schedule/next-available-slot', { params });
+  return response.data;
+};
+
+// Create appointment using next available slot
+export const createAppointmentNextSlot = async (appointmentData) => {
+  const data = {
+    ...appointmentData,
+    useNextAvailableSlot: true
+  };
+  const response = await apiClient.post('/schedule', data);
   return response.data;
 };
 

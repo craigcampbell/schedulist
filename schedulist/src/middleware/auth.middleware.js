@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User, Role } = require('../models');
+const { User, Role, Organization } = require('../models');
 
 /**
  * Middleware to verify JWT token
@@ -15,7 +15,10 @@ const verifyToken = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     
     const user = await User.findByPk(decoded.id, {
-      include: [{ model: Role }]
+      include: [
+        { model: Role },
+        { model: Organization }
+      ]
     });
     
     if (!user) {
@@ -32,7 +35,16 @@ const verifyToken = async (req, res, next) => {
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
-      roles: user.Roles.map(role => role.name)
+      roles: user.Roles.map(role => role.name),
+      organizationId: user.organizationId,
+      organization: user.Organization ? {
+        id: user.Organization.id,
+        name: user.Organization.name,
+        slug: user.Organization.slug,
+        logoUrl: user.Organization.logoUrl,
+        subscriptionActive: user.Organization.subscriptionActive
+      } : null,
+      isSuperAdmin: user.isSuperAdmin
     };
     
     next();
@@ -106,10 +118,113 @@ const hasPatientAccess = async (req, res, next) => {
   }
 };
 
+/**
+ * Middleware to check if organization has an active subscription
+ */
+const hasActiveSubscription = (req, res, next) => {
+  // Allow admin users to access their account even without active subscription
+  if (req.user && req.user.roles.includes('admin')) {
+    return next();
+  }
+  
+  // Check if the user belongs to an organization and has an active subscription
+  if (req.user && req.user.organization && req.user.organization.subscriptionActive) {
+    return next();
+  }
+  
+  // Check if user is a super admin (platform admin)
+  if (req.user && req.user.isSuperAdmin) {
+    return next();
+  }
+  
+  return res.status(402).json({ 
+    message: 'Subscription required', 
+    code: 'SUBSCRIPTION_REQUIRED',
+    subscriptionRequired: true 
+  });
+};
+
+/**
+ * Middleware to redirect to tenant subdomain
+ */
+const tenantResolver = (req, res, next) => {
+  // If no user or no organization, continue
+  if (!req.user || !req.user.organization) {
+    return next();
+  }
+  
+  const host = req.get('host');
+  const slug = req.user.organization.slug;
+  
+  // Check if already on correct subdomain
+  if (host.startsWith(`${slug}.`)) {
+    return next();
+  }
+  
+  // For API requests, just continue
+  if (req.path.startsWith('/api/')) {
+    return next();
+  }
+  
+  // Extract domain from current host
+  const parts = host.split('.');
+  const domain = parts.length > 1 ? parts.slice(1).join('.') : host;
+  
+  // Redirect to tenant subdomain
+  const targetHost = `${slug}.${domain}`;
+  const protocol = req.secure ? 'https' : 'http';
+  const redirectUrl = `${protocol}://${targetHost}${req.originalUrl}`;
+  
+  return res.redirect(302, redirectUrl);
+};
+
+/**
+ * Middleware to extract organization from subdomain
+ */
+const subdomainExtractor = async (req, res, next) => {
+  try {
+    const host = req.get('host');
+    
+    // Skip for direct domain access
+    if (!host.includes('.') || host.startsWith('www.')) {
+      return next();
+    }
+    
+    const subdomain = host.split('.')[0];
+    
+    // Skip for localhost or IP addresses
+    if (subdomain === 'localhost' || /^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+      return next();
+    }
+    
+    // Lookup organization by slug
+    const organization = await Organization.findOne({
+      where: { slug: subdomain }
+    });
+    
+    if (organization) {
+      req.organization = {
+        id: organization.id,
+        name: organization.name,
+        slug: organization.slug,
+        logoUrl: organization.logoUrl
+      };
+    }
+    
+    next();
+  } catch (error) {
+    console.error('Error in subdomain extraction:', error);
+    next();
+  }
+};
+
 module.exports = {
   verifyToken,
   isAdmin,
   isBCBA,
   isTherapist,
-  hasPatientAccess
+  hasPatientAccess,
+  hasActiveSubscription,
+  tenantResolver,
+  subdomainExtractor
 };

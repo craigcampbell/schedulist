@@ -46,6 +46,22 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('active', 'inactive', 'pending', 'discharged'),
       defaultValue: 'active',
     },
+    organizationId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'organizations',
+        key: 'id'
+      }
+    },
+    primaryBcbaId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'Users',
+        key: 'id'
+      }
+    },
     
     // Virtual fields that get decrypted
     firstName: {

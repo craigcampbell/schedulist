@@ -47,6 +47,18 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DATE,
       allowNull: true,
     },
+    organizationId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'organizations',
+        key: 'id'
+      }
+    },
+    isSuperAdmin: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
   }, {
     timestamps: true,
     hooks: {

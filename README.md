@@ -47,6 +47,7 @@ Schedulist is a comprehensive application designed for ABA therapy clinics to ma
    ```
 
 5. Initialize the database with default roles and test data:
+   For Local Dev I recommend use Docker with postgres latest image should be fine. 
    ```
    npm run db:seed
    ```
@@ -189,5 +190,4 @@ The React frontend includes:
 - **HTTPS**: Production deployment should use HTTPS for all communications
 
 ## License
-
-[MIT](LICENSE)
+Copyright Craig Campbell

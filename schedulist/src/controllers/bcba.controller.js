@@ -1,5 +1,6 @@
-const { User, Role, Patient } = require('../models');
+const { User, Role, Patient, Appointment } = require('../models');
 const { Op } = require('sequelize');
+const sequelize = require('sequelize');
 
 /**
  * Get all therapists managed by this BCBA
@@ -312,10 +313,411 @@ const getDashboardSummary = async (req, res) => {
   }
 };
 
+/**
+ * Get available therapists for assignment (organizational level)
+ */
+const getAvailableTherapists = async (req, res) => {
+  try {
+    const bcbaId = req.user.id;
+    const { organizationId } = req.user;
+    
+    // Get user with organization
+    const user = await User.findByPk(bcbaId, {
+      attributes: ['id', 'organizationId']
+    });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Get all therapists in the same organization
+    const therapistRole = await Role.findOne({ where: { name: 'therapist' } });
+    
+    if (!therapistRole) {
+      return res.status(404).json({ message: 'Therapist role not found' });
+    }
+    
+    const therapists = await User.findAll({
+      include: [
+        {
+          model: Role,
+          where: { id: therapistRole.id },
+          through: { attributes: [] }
+        }
+      ],
+      where: { 
+        organizationId: user.organizationId,
+        active: true
+      },
+      attributes: ['id', 'firstName', 'lastName', 'email', 'active']
+    });
+    
+    return res.status(200).json(therapists);
+    
+  } catch (error) {
+    return res.status(500).json({ message: 'Error fetching available therapists', error: error.message });
+  }
+};
+
+/**
+ * Get available BCBAs for assignment (organizational level)
+ */
+const getAvailableBCBAs = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { organizationId } = req.user;
+    
+    // Get user with organization
+    const user = await User.findByPk(userId, {
+      attributes: ['id', 'organizationId']
+    });
+    
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Get all BCBAs in the same organization
+    const bcbaRole = await Role.findOne({ where: { name: 'bcba' } });
+    
+    if (!bcbaRole) {
+      return res.status(404).json({ message: 'BCBA role not found' });
+    }
+    
+    const bcbas = await User.findAll({
+      include: [
+        {
+          model: Role,
+          where: { id: bcbaRole.id },
+          through: { attributes: [] }
+        }
+      ],
+      where: { 
+        organizationId: user.organizationId,
+        active: true
+      },
+      attributes: ['id', 'firstName', 'lastName', 'email', 'active']
+    });
+    
+    return res.status(200).json(bcbas);
+    
+  } catch (error) {
+    return res.status(500).json({ message: 'Error fetching available BCBAs', error: error.message });
+  }
+};
+
+/**
+ * Get patients with their assigned BCBAs and therapists
+ */
+const getPatientsWithAssignments = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const isAdmin = req.user.roles.includes('admin');
+    const isBcba = req.user.roles.includes('bcba');
+    
+    let whereClause = {};
+    
+    // Admins can see all patients in their organization
+    if (isAdmin) {
+      whereClause = { organizationId: req.user.organizationId };
+    } 
+    // BCBAs can only see their assigned patients
+    else if (isBcba) {
+      const assignedPatients = await Patient.findAll({
+        include: [
+          {
+            model: User,
+            as: 'Assignees',
+            where: { id: userId },
+            attributes: [],
+            through: { attributes: [] }
+          }
+        ],
+        attributes: ['id']
+      });
+      
+      const patientIds = assignedPatients.map(p => p.id);
+      
+      if (patientIds.length === 0) {
+        return res.status(200).json([]);
+      }
+      
+      whereClause = { id: { [Op.in]: patientIds } };
+    } 
+    // Therapists should not have access to this endpoint
+    else {
+      return res.status(403).json({ message: 'Not authorized to access this resource' });
+    }
+    
+    // Get patients with their assignees
+    const patients = await Patient.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: User,
+          as: 'Assignees',
+          include: [
+            {
+              model: Role,
+              attributes: ['name']
+            }
+          ],
+          through: { attributes: [] }
+        },
+        {
+          model: User,
+          as: 'PrimaryBCBA',
+          attributes: ['id', 'firstName', 'lastName']
+        }
+      ],
+      order: [['lastName', 'ASC'], ['firstName', 'ASC']]
+    });
+    
+    // Format response to group assignees by role
+    const formattedPatients = patients.map(patient => {
+      const patientData = {
+        id: patient.id,
+        firstName: patient.firstName,
+        lastName: patient.lastName,
+        status: patient.status,
+        primaryBCBA: patient.PrimaryBCBA ? {
+          id: patient.PrimaryBCBA.id,
+          name: `${patient.PrimaryBCBA.firstName} ${patient.PrimaryBCBA.lastName}`
+        } : null,
+        bcbas: [],
+        therapists: []
+      };
+      
+      // Group assignees by role
+      if (patient.Assignees) {
+        patient.Assignees.forEach(assignee => {
+          const role = assignee.Roles.find(r => r.name === 'bcba' || r.name === 'therapist');
+          
+          if (role) {
+            if (role.name === 'bcba') {
+              patientData.bcbas.push({
+                id: assignee.id,
+                name: `${assignee.firstName} ${assignee.lastName}`
+              });
+            } else if (role.name === 'therapist') {
+              patientData.therapists.push({
+                id: assignee.id,
+                name: `${assignee.firstName} ${assignee.lastName}`
+              });
+            }
+          }
+        });
+      }
+      
+      return patientData;
+    });
+    
+    return res.status(200).json(formattedPatients);
+    
+  } catch (error) {
+    return res.status(500).json({ message: 'Error fetching patients with assignments', error: error.message });
+  }
+};
+
+/**
+ * Set primary BCBA for a patient
+ */
+const setPrimaryBCBA = async (req, res) => {
+  try {
+    const { patientId, bcbaId } = req.body;
+    
+    if (!patientId || !bcbaId) {
+      return res.status(400).json({ message: 'Patient ID and BCBA ID are required' });
+    }
+    
+    // Verify both exist
+    const patient = await Patient.findByPk(patientId);
+    if (!patient) {
+      return res.status(404).json({ message: 'Patient not found' });
+    }
+    
+    const bcba = await User.findByPk(bcbaId, {
+      include: [
+        {
+          model: Role,
+          where: { name: 'bcba' },
+          through: { attributes: [] }
+        }
+      ]
+    });
+    
+    if (!bcba) {
+      return res.status(404).json({ message: 'BCBA not found' });
+    }
+    
+    // Ensure the BCBA is assigned to the patient
+    await patient.addAssignee(bcba);
+    
+    // Set primary BCBA
+    patient.primaryBcbaId = bcbaId;
+    await patient.save();
+    
+    return res.status(200).json({
+      message: 'Primary BCBA set successfully',
+      patient: {
+        id: patient.id,
+        primaryBcbaId: patient.primaryBcbaId
+      }
+    });
+    
+  } catch (error) {
+    return res.status(500).json({ message: 'Error setting primary BCBA', error: error.message });
+  }
+};
+
+/**
+ * Assign or unassign a therapist from a patient
+ */
+const updateTherapistAssignment = async (req, res) => {
+  try {
+    const { patientId, therapistId, action } = req.body;
+    
+    if (!patientId || !therapistId || !action) {
+      return res.status(400).json({ message: 'Patient ID, therapist ID, and action are required' });
+    }
+    
+    if (action !== 'assign' && action !== 'unassign') {
+      return res.status(400).json({ message: 'Action must be either "assign" or "unassign"' });
+    }
+    
+    // Verify both exist
+    const patient = await Patient.findByPk(patientId);
+    if (!patient) {
+      return res.status(404).json({ message: 'Patient not found' });
+    }
+    
+    const therapist = await User.findByPk(therapistId, {
+      include: [
+        {
+          model: Role,
+          where: { name: 'therapist' },
+          through: { attributes: [] }
+        }
+      ]
+    });
+    
+    if (!therapist) {
+      return res.status(404).json({ message: 'Therapist not found' });
+    }
+    
+    // Check authorization - only admin or an assigned BCBA can modify assignments
+    const userId = req.user.id;
+    const isAdmin = req.user.roles.includes('admin');
+    
+    if (!isAdmin) {
+      const isAssignedBcba = await patient.hasAssignee(userId);
+      
+      if (!isAssignedBcba) {
+        return res.status(403).json({ message: 'Not authorized to modify this patient\'s assignments' });
+      }
+    }
+    
+    // Update assignment
+    if (action === 'assign') {
+      await patient.addAssignee(therapist);
+    } else {
+      await patient.removeAssignee(therapist);
+    }
+    
+    return res.status(200).json({
+      message: `Therapist ${action === 'assign' ? 'assigned to' : 'unassigned from'} patient successfully`,
+      patient: {
+        id: patient.id
+      },
+      therapist: {
+        id: therapist.id
+      }
+    });
+    
+  } catch (error) {
+    return res.status(500).json({ message: 'Error updating therapist assignment', error: error.message });
+  }
+};
+
+/**
+ * Assign or unassign a BCBA from a patient
+ */
+const updateBCBAAssignment = async (req, res) => {
+  try {
+    const { patientId, bcbaId, action } = req.body;
+    
+    if (!patientId || !bcbaId || !action) {
+      return res.status(400).json({ message: 'Patient ID, BCBA ID, and action are required' });
+    }
+    
+    if (action !== 'assign' && action !== 'unassign') {
+      return res.status(400).json({ message: 'Action must be either "assign" or "unassign"' });
+    }
+    
+    // Verify both exist
+    const patient = await Patient.findByPk(patientId);
+    if (!patient) {
+      return res.status(404).json({ message: 'Patient not found' });
+    }
+    
+    const bcba = await User.findByPk(bcbaId, {
+      include: [
+        {
+          model: Role,
+          where: { name: 'bcba' },
+          through: { attributes: [] }
+        }
+      ]
+    });
+    
+    if (!bcba) {
+      return res.status(404).json({ message: 'BCBA not found' });
+    }
+    
+    // Only admins or the primary BCBA can modify BCBA assignments
+    const userId = req.user.id;
+    const isAdmin = req.user.roles.includes('admin');
+    
+    if (!isAdmin && patient.primaryBcbaId !== userId) {
+      return res.status(403).json({ message: 'Not authorized to modify BCBA assignments for this patient' });
+    }
+    
+    // Check if unassigning the primary BCBA
+    if (action === 'unassign' && patient.primaryBcbaId === bcbaId) {
+      return res.status(400).json({ message: 'Cannot unassign the primary BCBA. Please set another BCBA as primary first.' });
+    }
+    
+    // Update assignment
+    if (action === 'assign') {
+      await patient.addAssignee(bcba);
+    } else {
+      await patient.removeAssignee(bcba);
+    }
+    
+    return res.status(200).json({
+      message: `BCBA ${action === 'assign' ? 'assigned to' : 'unassigned from'} patient successfully`,
+      patient: {
+        id: patient.id
+      },
+      bcba: {
+        id: bcba.id
+      }
+    });
+    
+  } catch (error) {
+    return res.status(500).json({ message: 'Error updating BCBA assignment', error: error.message });
+  }
+};
+
 module.exports = {
   getTherapists,
   addTherapist,
   updateTherapist,
   assignPatients,
-  getDashboardSummary
+  getDashboardSummary,
+  getAvailableTherapists,
+  getAvailableBCBAs,
+  getPatientsWithAssignments,
+  setPrimaryBCBA,
+  updateTherapistAssignment,
+  updateBCBAAssignment
 };

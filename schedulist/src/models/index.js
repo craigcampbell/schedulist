@@ -27,8 +27,19 @@ db.Patient = require('./patient.model')(sequelize, Sequelize);
 db.Appointment = require('./appointment.model')(sequelize, Sequelize);
 db.Note = require('./note.model')(sequelize, Sequelize);
 db.Location = require('./location.model')(sequelize, Sequelize);
+db.Organization = require('./organization.model')(sequelize);
 
 // Define associations
+
+// Organization relationships
+db.Organization.hasMany(db.User, { foreignKey: 'organizationId', as: 'users' });
+db.User.belongsTo(db.Organization, { foreignKey: 'organizationId' });
+
+db.Organization.hasMany(db.Location, { foreignKey: 'organizationId', as: 'locations' });
+db.Location.belongsTo(db.Organization, { foreignKey: 'organizationId' });
+
+db.Organization.hasMany(db.Patient, { foreignKey: 'organizationId', as: 'patients' });
+db.Patient.belongsTo(db.Organization, { foreignKey: 'organizationId' });
 
 // User and Role relationship (many-to-many)
 db.User.belongsToMany(db.Role, { through: 'UserRoles' });
@@ -45,8 +56,15 @@ db.Appointment.belongsTo(db.Patient);
 db.User.hasMany(db.Appointment, { as: 'TherapistAppointments', foreignKey: 'therapistId' });
 db.Appointment.belongsTo(db.User, { as: 'Therapist', foreignKey: 'therapistId' });
 
+db.User.hasMany(db.Appointment, { as: 'BCBAAppointments', foreignKey: 'bcbaId' });
+db.Appointment.belongsTo(db.User, { as: 'BCBA', foreignKey: 'bcbaId' });
+
 db.Location.hasMany(db.Appointment);
 db.Appointment.belongsTo(db.Location);
+
+// Primary BCBA relationship with Patient
+db.User.hasMany(db.Patient, { as: 'PrimaryPatients', foreignKey: 'primaryBcbaId' });
+db.Patient.belongsTo(db.User, { as: 'PrimaryBCBA', foreignKey: 'primaryBcbaId' });
 
 // Note relationships
 db.Patient.hasMany(db.Note);

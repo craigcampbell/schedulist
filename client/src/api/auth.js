@@ -1,7 +1,14 @@
 import apiClient from './client';
 
-export const loginUser = async (email, password) => {
-  const response = await apiClient.post('/auth/login', { email, password });
+export const loginUser = async (email, password, organizationSlug = null) => {
+  const data = { email, password };
+  
+  // Add organization slug if provided
+  if (organizationSlug) {
+    data.organizationSlug = organizationSlug;
+  }
+  
+  const response = await apiClient.post('/auth/login', data);
   return response.data;
 };
 
@@ -27,5 +34,10 @@ export const requestPasswordReset = async (email) => {
 
 export const resetPassword = async (token, newPassword) => {
   const response = await apiClient.post('/auth/reset-password', { token, newPassword });
+  return response.data;
+};
+
+export const logoutUser = async () => {
+  const response = await apiClient.post('/auth/logout');
   return response.data;
 };

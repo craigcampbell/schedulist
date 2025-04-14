@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/auth-context';
 import { useTheme } from '../context/theme-provider';
 import { 
@@ -18,7 +18,7 @@ import {
 import { Button } from '../components/ui/button';
 
 export default function DashboardLayout() {
-  const { user, logout, isAdmin, isBCBA } = useAuth();
+  const { user, logout, isAdmin, isBCBA, organizationInfo } = useAuth();
   const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -44,7 +44,17 @@ export default function DashboardLayout() {
         } fixed inset-y-0 left-0 z-50 w-64 bg-white dark:bg-gray-800 shadow-lg transform transition-transform duration-300 ease-in-out md:translate-x-0 md:static md:h-screen`}
       >
         <div className="flex items-center justify-between h-16 px-4 border-b dark:border-gray-700">
-          <h1 className="text-xl font-bold">Schedulist</h1>
+          <div className="flex items-center space-x-2">
+            {organizationInfo?.logoUrl ? (
+              <img 
+                src={organizationInfo.logoUrl} 
+                alt="Organization Logo" 
+                className="h-8 w-auto"
+              />
+            ) : (
+              <h1 className="text-xl font-bold">TheraThere</h1>
+            )}
+          </div>
           <button 
             className="md:hidden text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-white"
             onClick={closeSidebar}
@@ -61,6 +71,11 @@ export default function DashboardLayout() {
               <p className="text-xs text-gray-500 dark:text-gray-400">
                 {user?.roles?.map(role => role.charAt(0).toUpperCase() + role.slice(1)).join(', ')}
               </p>
+              {organizationInfo && (
+                <p className="text-xs text-blue-600 dark:text-blue-400">
+                  {organizationInfo.name}
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -110,6 +125,20 @@ export default function DashboardLayout() {
               >
                 <MapPin className="mr-3 h-5 w-5" />
                 Locations
+              </NavLink>
+              <NavLink 
+                to="/admin/subscription" 
+                className={({ isActive }) => 
+                  `flex items-center px-2 py-2 text-sm font-medium rounded-md ${
+                    isActive 
+                      ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-white'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'
+                  }`
+                }
+                onClick={closeSidebar}
+              >
+                <Settings className="mr-3 h-5 w-5" />
+                Subscription
               </NavLink>
             </>
           )}
