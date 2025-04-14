@@ -9,16 +9,13 @@ const getAllUsers = async (req, res) => {
   try {
     const { role, active } = req.query;
     
-    // Build query
     const include = [{ model: Role }];
     const where = {};
     
-    // Filter by role if provided
     if (role) {
       include[0].where = { name: role };
     }
     
-    // Filter by active status if provided
     if (active !== undefined) {
       where.active = active === 'true';
     }
@@ -30,7 +27,6 @@ const getAllUsers = async (req, res) => {
       order: [['lastName', 'ASC'], ['firstName', 'ASC']]
     });
     
-    // Format response
     const formattedUsers = users.map(user => ({
       id: user.id,
       firstName: user.firstName,
@@ -51,9 +47,6 @@ const getAllUsers = async (req, res) => {
   }
 };
 
-/**
- * Get user by ID
- */
 const getUserById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -67,7 +60,6 @@ const getUserById = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
     
-    // Format response
     const formattedUser = {
       id: user.id,
       firstName: user.firstName,
@@ -102,7 +94,6 @@ const createUser = async (req, res) => {
       return res.status(400).json({ message: 'Email already in use' });
     }
     
-    // Create the user
     const user = await User.create({
       firstName,
       lastName,
@@ -112,7 +103,6 @@ const createUser = async (req, res) => {
       active: true
     });
     
-    // Assign roles
     if (Array.isArray(roles) && roles.length > 0) {
       const roleRecords = await Role.findAll({
         where: { name: { [Op.in]: roles } }
@@ -222,7 +212,7 @@ const deleteUser = async (req, res) => {
         message: 'User deactivated successfully'
       });
     } else {
-      // Hard delete - be careful with this in production!
+      // Hard delete - be careful
       await user.destroy();
       
       return res.status(200).json({
@@ -242,10 +232,8 @@ const getAllLocations = async (req, res) => {
   try {
     const { active } = req.query;
     
-    // Build query
     const where = {};
     
-    // Filter by active status if provided
     if (active !== undefined) {
       where.active = active === 'true';
     }
@@ -305,8 +293,7 @@ const updateLocation = async (req, res) => {
     if (!location) {
       return res.status(404).json({ message: 'Location not found' });
     }
-    
-    // Update fields
+
     if (name) location.name = name;
     if (address) location.address = address;
     if (city) location.city = city;

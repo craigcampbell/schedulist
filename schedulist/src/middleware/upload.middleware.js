@@ -3,7 +3,6 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 
-// Ensure upload directories exist
 const createUploadDirs = () => {
   const uploadDir = path.join(__dirname, '../../uploads');
   const logosDir = path.join(uploadDir, 'logos');
@@ -17,10 +16,8 @@ const createUploadDirs = () => {
   }
 };
 
-// Create directories on server start
 createUploadDirs();
 
-// Storage configuration for logo uploads
 const logoStorage = multer.diskStorage({
   destination: function(req, file, cb) {
     const uploadPath = path.join(__dirname, '../../uploads/logos');
@@ -34,7 +31,6 @@ const logoStorage = multer.diskStorage({
   }
 });
 
-// File filter for images
 const imageFilter = (req, file, cb) => {
   const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
   
@@ -45,19 +41,17 @@ const imageFilter = (req, file, cb) => {
   }
 };
 
-// Multer upload configuration for logos
 const logoUpload = multer({
   storage: logoStorage,
   limits: {
-    fileSize: 2 * 1024 * 1024 // 2MB max size
+    fileSize: 2 * 1024 * 1024
   },
   fileFilter: imageFilter
 });
 
-// Middleware to handle logo uploads
+
 const uploadLogo = logoUpload.single('logo');
 
-// Error handler middleware for multer
 const handleMulterError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
     // A Multer error occurred
@@ -66,7 +60,7 @@ const handleMulterError = (err, req, res, next) => {
     }
     return res.status(400).json({ message: `Upload error: ${err.message}` });
   } else if (err) {
-    // A general error occurred
+    // Bonkers
     return res.status(500).json({ message: err.message });
   }
   next();
