@@ -1,6 +1,8 @@
 const express = require('express');
 const { check, validationResult } = require('express-validator');
 const bcbaController = require('../controllers/bcba.controller');
+// import { authenticate, hasRole } from '../middleware/auth.middleware';
+const { authenticate, hasRole } = require('../middleware/auth.middleware');
 const { verifyToken, isBCBA } = require('../middleware/auth.middleware');
 
 const router = express.Router();
@@ -59,7 +61,7 @@ router.get('/available-therapists', bcbaController.getAvailableTherapists);
 router.get('/available-bcbas', bcbaController.getAvailableBCBAs);
 
 // Get patients with assignments
-router.get('/patients-with-assignments', bcbaController.getPatientsWithAssignments);
+router.get('/patients-with-assignments', authenticate, bcbaController.getPatientsWithAssignments);
 
 // Set primary BCBA for a patient
 router.post(
@@ -83,6 +85,15 @@ router.post(
   validate,
   bcbaController.updateTherapistAssignment
 );
+
+// router.get(
+//   'unassigned-patients',
+//   authenticate,
+//   hasRole('bcba', 'admin'),
+//   bcbaController.getUnassignedPatients
+// );
+
+router.get('/unassigned-patients', authenticate, bcbaController.getUnassignedPatients);
 
 // Update BCBA assignment
 router.post(

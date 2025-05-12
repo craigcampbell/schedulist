@@ -21,6 +21,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('scheduled', 'completed', 'cancelled', 'no-show'),
       defaultValue: 'scheduled',
     },
+    serviceType: {
+      type: DataTypes.ENUM('direct', 'indirect', 'supervision', 'noOw', 'lunch', 'circle', 'cleaning'),
+      allowNull: false,
+      defaultValue: 'direct'
+    },
     notes: {
       type: DataTypes.TEXT,
       allowNull: true,
@@ -59,7 +64,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     patientId: {
       type: DataTypes.UUID,
-      allowNull: false,
+      allowNull: true, // Allow null for non-patient activities like lunch
       references: {
         model: 'Patients',
         key: 'id'

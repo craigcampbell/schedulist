@@ -9,16 +9,30 @@ const getAllUsers = async (req, res) => {
   try {
     const { role, active } = req.query;
     
-    const include = [{ model: Role }];
+    // Create a new approach for the query
+    let include = [{ model: Role }];
     const where = {};
     
-    if (role) {
-      include[0].where = { name: role };
+    // Filter users by organization
+    if (req.user && req.user.organizationId) {
+      where.organizationId = req.user.organizationId;
+    }
+    
+    if (role && role !== 'all') {
+      // Alternative approach for role filtering
+      const roleWhere = { name: role };
+      include = [{ 
+        model: Role,
+        where: roleWhere,
+        required: true // This ensures INNER JOIN instead of LEFT JOIN
+      }];
     }
     
     if (active !== undefined) {
       where.active = active === 'true';
     }
+    
+    console.log('User query:', { where, organizationId: req.user?.organizationId, role });
     
     const users = await User.findAll({
       where,
@@ -26,6 +40,34 @@ const getAllUsers = async (req, res) => {
       attributes: { exclude: ['password', 'passwordResetToken', 'passwordResetExpires'] },
       order: [['lastName', 'ASC'], ['firstName', 'ASC']]
     });
+    
+    console.log('Users found:', users.length);
+    
+    // Debug: Check role associations
+    if (users.length === 0 && role === 'therapist') {
+      console.log('DEBUG: No therapists found, checking if roles exist...');
+      
+      // Check if the therapist role exists
+      const therapistRole = await Role.findOne({ where: { name: 'therapist' } });
+      console.log('Therapist role:', therapistRole ? therapistRole.id : 'Not found');
+      
+      // Check if any users have the therapist role
+      if (therapistRole) {
+        const usersWithTherapistRole = await User.findAll({
+          include: [{
+            model: Role,
+            where: { id: therapistRole.id }
+          }]
+        });
+        console.log('Total users with therapist role:', usersWithTherapistRole.length);
+        
+        // Check if any users in this organization exist
+        const orgUsers = await User.findAll({
+          where: { organizationId: req.user.organizationId }
+        });
+        console.log('Total users in this organization:', orgUsers.length);
+      }
+    }
     
     const formattedUsers = users.map(user => ({
       id: user.id,

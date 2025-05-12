@@ -1,7 +1,7 @@
 const express = require('express');
 const { check, validationResult } = require('express-validator');
 const scheduleController = require('../controllers/schedule.controller');
-const { verifyToken, isTherapist, isBCBA, hasPatientAccess } = require('../middleware/auth.middleware');
+const { verifyToken, isTherapist, isBCBA, hasPatientAccess, authenticate } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
@@ -78,5 +78,8 @@ router.delete(
   isBCBA,
   scheduleController.deleteAppointment
 );
+
+// Get team-based schedule
+router.get('/teams', scheduleController.getTeamSchedule);
 
 module.exports = router;

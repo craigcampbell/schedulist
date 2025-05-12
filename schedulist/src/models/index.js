@@ -28,6 +28,7 @@ db.Appointment = require('./appointment.model')(sequelize, Sequelize);
 db.Note = require('./note.model')(sequelize, Sequelize);
 db.Location = require('./location.model')(sequelize, Sequelize);
 db.Organization = require('./organization.model')(sequelize);
+db.Team = require('./team.model')(sequelize, Sequelize);
 
 // Define associations
 
@@ -72,5 +73,12 @@ db.Note.belongsTo(db.Patient);
 
 db.User.hasMany(db.Note, { foreignKey: 'authorId' });
 db.Note.belongsTo(db.User, { as: 'Author', foreignKey: 'authorId' });
+
+// Team relationships
+db.User.hasMany(db.Team, { foreignKey: 'leadBcbaId', as: 'LedTeams' });
+db.Team.belongsTo(db.User, { foreignKey: 'leadBcbaId', as: 'LeadBCBA' });
+
+db.User.belongsToMany(db.Team, { through: 'TeamMembers', as: 'Teams', foreignKey: 'userId' });
+db.Team.belongsToMany(db.User, { through: 'TeamMembers', as: 'Members', foreignKey: 'teamId' });
 
 module.exports = db;

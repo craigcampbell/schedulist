@@ -40,12 +40,24 @@ export const deleteUser = async (id, deactivateOnly = true) => {
   return response.data;
 };
 
-// Get all locations
+// Get all locations (proxy route - accessible by both admins and BCBAs)
 export const getLocations = async (active) => {
-  const response = await apiClient.get('/admin/locations', {
-    params: { active }
-  });
-  return response.data;
+  try {
+    // First try to use the proxy route for BCBAs
+    const response = await apiClient.get('/proxy/locations', {
+      params: { active }
+    });
+    return response.data;
+  } catch (error) {
+    // If proxy fails, fallback to admin route (for backward compatibility)
+    if (error.response?.status === 404) {
+      const response = await apiClient.get('/admin/locations', {
+        params: { active }
+      });
+      return response.data;
+    }
+    throw error;
+  }
 };
 
 // Create a new location

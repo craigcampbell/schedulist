@@ -44,8 +44,18 @@ export const getAvailableBCBAs = async () => {
 
 // Get patients with their assignments (BCBAs and therapists)
 export const getPatientsWithAssignments = async () => {
-  const response = await apiClient.get('/bcba/patients-with-assignments');
-  return response.data;
+  try {
+    const response = await apiClient.get('/bcba/patients-with-assignments');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching patients with assignments:', error);
+    // Return empty array instead of throwing
+    if (error.response && error.response.status === 401) {
+      // If unauthorized, let the auth interceptor handle redirect
+      throw error;
+    }
+    return [];
+  }
 };
 
 // Set primary BCBA for a patient
@@ -71,5 +81,10 @@ export const updateBCBAAssignment = async (patientId, bcbaId, action) => {
     bcbaId, 
     action // 'assign' or 'unassign'
   });
+  return response.data;
+};
+
+export const getUnassignedPatients = async () => {
+  const response = await apiClient.get('/bcba/unassigned-patients');
   return response.data;
 };

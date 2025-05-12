@@ -36,8 +36,6 @@ const getTherapists = async (req, res) => {
       include: [
         {
           model: Role,
-          where: { id: therapistRole.id },
-          attributes: [],
           through: { attributes: [] }
         },
         {
@@ -49,10 +47,31 @@ const getTherapists = async (req, res) => {
           required: false
         }
       ],
-      attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'active', 'createdAt', 'updatedAt']
+      attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'active', 'createdAt', 'updatedAt'],
+      order: [['lastName', 'ASC'], ['firstName', 'ASC']]
     });
     
-    return res.status(200).json(therapists);
+    // Format the response to include roles
+    const formattedTherapists = therapists.map(therapist => {
+      const roles = therapist.Roles ? therapist.Roles.map(role => role.name) : [];
+      return {
+        id: therapist.id,
+        firstName: therapist.firstName,
+        lastName: therapist.lastName,
+        email: therapist.email,
+        phone: therapist.phone,
+        active: therapist.active,
+        createdAt: therapist.createdAt,
+        updatedAt: therapist.updatedAt,
+        roles: roles,
+        name: `${therapist.firstName} ${therapist.lastName}`
+      };
+    });
+    
+    // Filter to make sure therapist role is included
+    const filteredTherapists = formattedTherapists.filter(t => t.roles.includes('therapist'));
+    
+    return res.status(200).json(filteredTherapists);
     
   } catch (error) {
     return res.status(500).json({ message: 'Error fetching therapists', error: error.message });
@@ -137,6 +156,84 @@ const updateTherapist = async (req, res) => {
     
   } catch (error) {
     return res.status(500).json({ message: 'Error updating therapist', error: error.message });
+  }
+};
+/**  
+ * return list of unassigned Patients
+ * 
+*/
+const getUnassignedPatients = async (req, res) => {
+  try {
+    const { therapistId } = req.query; // Get from query params instead
+    const userId = req.user.id;
+    
+    // If no therapist ID is provided, return all patients not assigned to the current BCBA
+    if (!therapistId) {
+      // Get all patients in the organization
+      const allPatients = await Patient.findAll({
+        where: { organizationId: req.user.organizationId },
+        attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'active', 'status', 'createdAt', 'updatedAt']
+      });
+      
+      // Get patients assigned to the BCBA
+      const assignedPatients = await Patient.findAll({
+        include: [
+          {
+            model: User,
+            as: 'Assignees',
+            where: { id: userId },
+            attributes: [],
+            through: { attributes: [] }
+          }
+        ],
+        attributes: ['id']
+      });
+      
+      const assignedPatientIds = assignedPatients.map(p => p.id);
+      
+      // Filter out assigned patients
+      const unassignedPatients = allPatients.filter(p => !assignedPatientIds.includes(p.id));
+      
+      return res.status(200).json(unassignedPatients);
+    }
+    
+    // If a therapist ID is provided, return all patients not assigned to that therapist
+    const therapist = await User.findByPk(therapistId);
+
+    if (!therapist) {
+      return res.status(404).json({ message: 'Therapist not found' });
+    }
+    
+    // Get all patients assigned to the therapist
+    const assignedPatients = await Patient.findAll({
+      include: [
+        {
+          model: User,
+          as: 'Assignees',
+          where: { id: therapistId },
+          attributes: [],
+          through: { attributes: [] }
+        }
+      ],
+      attributes: ['id']
+    });
+    
+    const assignedPatientIds = assignedPatients.map(p => p.id);
+    
+    // Get all patients in the organization not assigned to the therapist
+    const unassignedPatients = await Patient.findAll({
+      where: { 
+        organizationId: req.user.organizationId,
+        id: { [Op.notIn]: assignedPatientIds }
+      },
+      attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'active', 'status', 'createdAt', 'updatedAt']
+    });
+
+    return res.status(200).json(unassignedPatients);
+
+  } catch (error) {
+    console.error('Error fetching unassigned patients:', error);
+    return res.status(500).json({ message: 'Error fetching unassigned patients', error: error.message });
   }
 };
 
@@ -395,10 +492,22 @@ const getAvailableBCBAs = async (req, res) => {
         organizationId: user.organizationId,
         active: true
       },
-      attributes: ['id', 'firstName', 'lastName', 'email', 'active']
+      attributes: ['id', 'firstName', 'lastName', 'email', 'active'],
+      order: [['lastName', 'ASC'], ['firstName', 'ASC']]
     });
     
-    return res.status(200).json(bcbas);
+    // Format the response
+    const formattedBcbas = bcbas.map(bcba => ({
+      id: bcba.id,
+      firstName: bcba.firstName,
+      lastName: bcba.lastName,
+      email: bcba.email,
+      active: bcba.active,
+      name: `${bcba.firstName} ${bcba.lastName}`,
+      roles: ['bcba'] // Add the roles array for consistency
+    }));
+    
+    return res.status(200).json(formattedBcbas);
     
   } catch (error) {
     return res.status(500).json({ message: 'Error fetching available BCBAs', error: error.message });
@@ -410,9 +519,23 @@ const getAvailableBCBAs = async (req, res) => {
  */
 const getPatientsWithAssignments = async (req, res) => {
   try {
+    console.log('getPatientsWithAssignments called by user:', req.user);
+    
+    // Check if req.user exists and has necessary properties
+    if (!req.user || !req.user.id || !req.user.organizationId) {
+      console.error('Missing user data in request:', req.user);
+      return res.status(401).json({ message: 'User data incomplete or missing' });
+    }
+    
     const userId = req.user.id;
-    const isAdmin = req.user.roles.includes('admin');
-    const isBcba = req.user.roles.includes('bcba');
+    const isAdmin = req.user.roles && req.user.roles.includes('admin');
+    const isBcba = req.user.roles && req.user.roles.includes('bcba');
+    
+    // If user doesn't have admin or bcba roles, they shouldn't access this endpoint
+    if (!isAdmin && !isBcba) {
+      console.warn(`User ${userId} attempted to access patients without proper role`);
+      return res.status(403).json({ message: 'Not authorized to access this resource' });
+    }
     
     let whereClause = {};
     
@@ -422,99 +545,127 @@ const getPatientsWithAssignments = async (req, res) => {
     } 
     // BCBAs can only see their assigned patients
     else if (isBcba) {
-      const assignedPatients = await Patient.findAll({
+      try {
+        const assignedPatients = await Patient.findAll({
+          include: [
+            {
+              model: User,
+              as: 'Assignees',
+              where: { id: userId },
+              attributes: [],
+              through: { attributes: [] }
+            }
+          ],
+          attributes: ['id']
+        });
+        
+        const patientIds = assignedPatients.map(p => p.id);
+        
+        if (patientIds.length === 0) {
+          console.log(`BCBA ${userId} has no assigned patients`);
+          return res.status(200).json([]);
+        }
+        
+        whereClause = { id: { [Op.in]: patientIds } };
+      } catch (error) {
+        console.error('Error finding assigned patients:', error);
+        return res.status(500).json({ 
+          message: 'Error finding assigned patients', 
+          error: error.message 
+        });
+      }
+    }
+    
+    console.log('Fetching patients with whereClause:', whereClause);
+    
+    // Get patients with their assignees
+    try {
+      const patients = await Patient.findAll({
+        where: whereClause,
         include: [
           {
             model: User,
             as: 'Assignees',
-            where: { id: userId },
-            attributes: [],
+            include: [
+              {
+                model: Role,
+                attributes: ['name']
+              }
+            ],
             through: { attributes: [] }
+          },
+          {
+            model: User,
+            as: 'PrimaryBCBA',
+            attributes: ['id', 'firstName', 'lastName'],
+            required: false
           }
         ],
-        attributes: ['id']
+        order: [['lastName', 'ASC'], ['firstName', 'ASC']]
       });
       
-      const patientIds = assignedPatients.map(p => p.id);
+      console.log(`Found ${patients.length} patients`);
       
-      if (patientIds.length === 0) {
-        return res.status(200).json([]);
-      }
-      
-      whereClause = { id: { [Op.in]: patientIds } };
-    } 
-    // Therapists should not have access to this endpoint
-    else {
-      return res.status(403).json({ message: 'Not authorized to access this resource' });
-    }
-    
-    // Get patients with their assignees
-    const patients = await Patient.findAll({
-      where: whereClause,
-      include: [
-        {
-          model: User,
-          as: 'Assignees',
-          include: [
-            {
-              model: Role,
-              attributes: ['name']
+      // Format response to group assignees by role
+      const formattedPatients = patients.map(patient => {
+        const patientData = {
+          id: patient.id,
+          firstName: patient.firstName,
+          lastName: patient.lastName,
+          status: patient.status,
+          primaryBCBA: patient.PrimaryBCBA ? {
+            id: patient.PrimaryBCBA.id,
+            name: `${patient.PrimaryBCBA.firstName} ${patient.PrimaryBCBA.lastName}`
+          } : null,
+          bcbas: [],
+          therapists: []
+        };
+        
+        // Group assignees by role
+        if (patient.Assignees && Array.isArray(patient.Assignees)) {
+          patient.Assignees.forEach(assignee => {
+            if (!assignee || !assignee.Roles || !Array.isArray(assignee.Roles)) {
+              console.warn('Assignee or Roles missing/invalid:', assignee);
+              return; // Skip this assignee
             }
-          ],
-          through: { attributes: [] }
-        },
-        {
-          model: User,
-          as: 'PrimaryBCBA',
-          attributes: ['id', 'firstName', 'lastName']
+            
+            const role = assignee.Roles.find(r => r && (r.name === 'bcba' || r.name === 'therapist'));
+            
+            if (role) {
+              if (role.name === 'bcba') {
+                patientData.bcbas.push({
+                  id: assignee.id,
+                  name: `${assignee.firstName || ''} ${assignee.lastName || ''}`.trim()
+                });
+              } else if (role.name === 'therapist') {
+                patientData.therapists.push({
+                  id: assignee.id,
+                  name: `${assignee.firstName || ''} ${assignee.lastName || ''}`.trim()
+                });
+              }
+            }
+          });
         }
-      ],
-      order: [['lastName', 'ASC'], ['firstName', 'ASC']]
-    });
-    
-    // Format response to group assignees by role
-    const formattedPatients = patients.map(patient => {
-      const patientData = {
-        id: patient.id,
-        firstName: patient.firstName,
-        lastName: patient.lastName,
-        status: patient.status,
-        primaryBCBA: patient.PrimaryBCBA ? {
-          id: patient.PrimaryBCBA.id,
-          name: `${patient.PrimaryBCBA.firstName} ${patient.PrimaryBCBA.lastName}`
-        } : null,
-        bcbas: [],
-        therapists: []
-      };
+        
+        return patientData;
+      });
       
-      // Group assignees by role
-      if (patient.Assignees) {
-        patient.Assignees.forEach(assignee => {
-          const role = assignee.Roles.find(r => r.name === 'bcba' || r.name === 'therapist');
-          
-          if (role) {
-            if (role.name === 'bcba') {
-              patientData.bcbas.push({
-                id: assignee.id,
-                name: `${assignee.firstName} ${assignee.lastName}`
-              });
-            } else if (role.name === 'therapist') {
-              patientData.therapists.push({
-                id: assignee.id,
-                name: `${assignee.firstName} ${assignee.lastName}`
-              });
-            }
-          }
-        });
-      }
-      
-      return patientData;
-    });
-    
-    return res.status(200).json(formattedPatients);
-    
+      return res.status(200).json(formattedPatients);
+    } catch (error) {
+      console.error('Error in Patient.findAll:', error);
+      return res.status(500).json({ 
+        message: 'Error retrieving patient data', 
+        error: error.message,
+        stack: error.stack
+      });
+    }
   } catch (error) {
-    return res.status(500).json({ message: 'Error fetching patients with assignments', error: error.message });
+    console.error('Error fetching patients with assignments:', error);
+    return res.status(500).json({ 
+      message: 'Error fetching patients with assignments', 
+      error: error.message,
+      stack: error.stack // Include stack trace for debugging
+    });
   }
 };
 
@@ -719,5 +870,6 @@ module.exports = {
   getPatientsWithAssignments,
   setPrimaryBCBA,
   updateTherapistAssignment,
-  updateBCBAAssignment
+  updateBCBAAssignment,
+  getUnassignedPatients
 };

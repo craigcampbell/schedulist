@@ -1,26 +1,38 @@
 import { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { format, addDays, subDays, startOfDay, isSameDay } from 'date-fns';
 import { 
   Calendar, 
   ChevronLeft, 
   ChevronRight, 
   Clock, 
-  User 
+  User,
+  Settings,
+  Users
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
-import { getSchedule } from '../../api/schedule';
+import { getSchedule, getTeamSchedule } from '../../api/schedule';
 import { calculateAppointmentStyle, formatTime } from '../../utils/date-utils';
+import EnhancedScheduleView from '../../components/schedule/EnhancedScheduleView';
 
 export default function TherapistSchedulePage() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewType, setViewType] = useState('daily');
   const [selectedAppointment, setSelectedAppointment] = useState(null);
+  const queryClient = useQueryClient();
   
   // Fetch schedule data
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['therapistSchedule', viewType, selectedDate],
     queryFn: () => getSchedule(viewType, selectedDate.toISOString()),
+    enabled: viewType === 'daily' || viewType === 'weekly'
+  });
+  
+  // Fetch team schedule data for enhanced view
+  const { data: teamScheduleData, isLoading: isLoadingTeamSchedule, error: teamScheduleError } = useQuery({
+    queryKey: ['teamSchedule', selectedDate.toISOString()],
+    queryFn: () => getTeamSchedule(selectedDate.toISOString()),
+    enabled: viewType === 'enhanced'
   });
   
   // Navigate to previous day/week
@@ -46,9 +58,15 @@ export default function TherapistSchedulePage() {
     setSelectedDate(new Date());
   };
   
-  // Toggle between daily and weekly views
+  // Toggle between daily, weekly, and enhanced views
   const toggleViewType = () => {
-    setViewType(viewType === 'daily' ? 'weekly' : 'daily');
+    if (viewType === 'daily') {
+      setViewType('weekly');
+    } else if (viewType === 'weekly') {
+      setViewType('enhanced');
+    } else {
+      setViewType('daily');
+    }
   };
   
   // Handle appointment click
@@ -102,6 +120,11 @@ export default function TherapistSchedulePage() {
                 <Calendar className="h-4 w-4 mr-2" />
                 <span>Weekly</span>
               </>
+            ) : viewType === 'weekly' ? (
+              <>
+                <Settings className="h-4 w-4 mr-2" />
+                <span>Enhanced</span>
+              </>
             ) : (
               <>
                 <Clock className="h-4 w-4 mr-2" />
@@ -122,21 +145,25 @@ export default function TherapistSchedulePage() {
       </div>
       
       {/* Loading state */}
-      {isLoading && (
+      {((viewType === 'daily' || viewType === 'weekly') && isLoading) || 
+       (viewType === 'enhanced' && isLoadingTeamSchedule) ? (
         <div className="flex-1 flex justify-center items-center">
           <p>Loading schedule...</p>
         </div>
-      )}
+      ) : null}
       
       {/* Error state */}
-      {error && (
+      {((viewType === 'daily' || viewType === 'weekly') && error) || 
+       (viewType === 'enhanced' && teamScheduleError) ? (
         <div className="flex-1 flex justify-center items-center">
           <div className="text-center">
             <p className="text-red-500 mb-4">Failed to load schedule</p>
-            <Button onClick={refetch}>Try Again</Button>
+            <Button onClick={viewType === 'enhanced' ? 
+              () => queryClient.invalidateQueries(['teamSchedule']) : 
+              refetch}>Try Again</Button>
           </div>
         </div>
-      )}
+      ) : null}
       
       {/* Daily View */}
       {!isLoading && !error && viewType === 'daily' && (
@@ -228,6 +255,30 @@ export default function TherapistSchedulePage() {
               </div>
             )}
           </div>
+        </div>
+      )}
+      
+      {/* Enhanced View */}
+      {!isLoadingTeamSchedule && !teamScheduleError && viewType === 'enhanced' && (
+        <div className="flex-1 overflow-y-auto">
+          {teamScheduleData?.teams?.length > 0 ? (
+            <EnhancedScheduleView 
+              teams={teamScheduleData.teams} 
+              appointments={teamScheduleData.appointments || []} 
+              selectedDate={selectedDate}
+              onAppointmentClick={handleAppointmentClick}
+              onAppointmentUpdate={(updatedAppointment) => {
+                console.log('Appointment update requested:', updatedAppointment);
+                // Here you would add the actual mutation to update the appointment
+                alert('Drag and drop rescheduling is coming soon!');
+              }}
+            />
+          ) : (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <Users className="h-12 w-12 mx-auto mb-4 opacity-30" />
+              <p>No teams available. Create teams to use this view.</p>
+            </div>
+          )}
         </div>
       )}
       

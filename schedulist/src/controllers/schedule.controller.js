@@ -1,4 +1,4 @@
-const { Appointment, Patient, User, Location } = require('../models');
+const { Appointment, Patient, User, Location, Team } = require('../models');
 const { Op } = require('sequelize');
 
 /**
@@ -156,6 +156,7 @@ const getSchedule = async (req, res) => {
     });
     
   } catch (error) {
+    console.error('Error fetching schedule:', error);
     return res.status(500).json({ message: 'Error fetching schedule', error: error.message });
   }
 };
@@ -634,6 +635,199 @@ const getNextAvailableSlot = async (req, res) => {
   }
 };
 
+/**
+ * Get team-based schedule
+ */
+const getTeamSchedule = async (req, res) => {
+  try {
+    const { date } = req.query;
+    const userId = req.user.id;
+    const isAdmin = req.user.roles.includes('admin');
+    const isBcba = req.user.roles.includes('bcba');
+    
+    // Parse date or use current date
+    const baseDate = date ? new Date(date) : new Date();
+    
+    // Set start and end times for the day
+    const startDate = new Date(baseDate);
+    startDate.setHours(0, 0, 0, 0);
+    
+    const endDate = new Date(baseDate);
+    endDate.setHours(23, 59, 59, 999);
+    
+    // Get teams and their members
+    let teams;
+    if (isAdmin) {
+      // Admin can see all teams
+      teams = await Team.findAll({
+        include: [
+          {
+            model: User,
+            as: 'LeadBCBA',
+            attributes: ['id', 'firstName', 'lastName']
+          },
+          {
+            model: User,
+            as: 'Members',
+            attributes: ['id', 'firstName', 'lastName'],
+            through: { attributes: [] }
+          }
+        ]
+      });
+    } else if (isBcba) {
+      // BCBA can only see their own team
+      teams = await Team.findAll({
+        where: { leadBcbaId: userId },
+        include: [
+          {
+            model: User,
+            as: 'LeadBCBA',
+            attributes: ['id', 'firstName', 'lastName']
+          },
+          {
+            model: User,
+            as: 'Members',
+            attributes: ['id', 'firstName', 'lastName'],
+            through: { attributes: [] }
+          }
+        ]
+      });
+    } else {
+      // Regular therapists can only see their own team's schedule
+      teams = await Team.findAll({
+        include: [
+          {
+            model: User,
+            as: 'LeadBCBA',
+            attributes: ['id', 'firstName', 'lastName']
+          },
+          {
+            model: User,
+            as: 'Members',
+            attributes: ['id', 'firstName', 'lastName'],
+            where: { id: userId },
+            through: { attributes: [] }
+          }
+        ]
+      });
+    }
+    
+    // Get appointments based on teams or location
+    let appointmentWhere = {
+      startTime: { [Op.between]: [startDate, endDate] }
+    };
+    
+    let therapistIds = [];
+    
+    // If teams are available, use team-based filtering
+    if (teams && teams.length > 0) {
+      therapistIds = teams.flatMap(team => 
+        team.Members ? team.Members.map(member => member.id) : []
+      );
+      
+      if (therapistIds.length > 0) {
+        appointmentWhere.therapistId = { [Op.in]: therapistIds };
+      }
+    } 
+    // If no teams or no therapists in teams, try to filter by location
+    else {
+      // Check if user has a defaultLocationId or we can get their organization's locations
+      if (req.user.defaultLocationId) {
+        // Filter by user's default location
+        appointmentWhere.locationId = req.user.defaultLocationId;
+        console.log("No teams - filtering by user's default location:", req.user.defaultLocationId);
+      } 
+      // If we don't have a way to filter, just show all appointments in the date range
+      else {
+        console.log("No teams or default location - showing all appointments in date range");
+      }
+    }
+    
+    // Get appointments based on filtered criteria
+    const appointments = await Appointment.findAll({
+      where: appointmentWhere,
+      include: [
+        {
+          model: Patient,
+          attributes: ['id', 'firstName', 'lastName', 'status']
+        },
+        {
+          model: Location,
+          attributes: ['id', 'name']
+        }
+      ],
+      order: [['startTime', 'ASC']]
+    });
+    
+    // Get therapist and BCBA info separately to avoid association issues
+    const appointmentTherapistIds = appointments.map(app => app.therapistId);
+    const appointmentBcbaIds = appointments.map(app => app.bcbaId).filter(id => id); // Filter out null values
+    
+    // Get all unique user IDs
+    const userIds = [...new Set([...appointmentTherapistIds, ...appointmentBcbaIds])];
+    
+    // Fetch all needed users in one query
+    const users = userIds.length > 0 ? await User.findAll({
+      where: { id: { [Op.in]: userIds } },
+      attributes: ['id', 'firstName', 'lastName']
+    }) : [];
+    
+    // Create a map for quick user lookup
+    const usersMap = {};
+    users.forEach(user => {
+      usersMap[user.id] = user;
+    });
+    
+    return res.status(200).json({
+      teams,
+      appointments: appointments.map(appt => {
+        const therapist = usersMap[appt.therapistId];
+        const bcba = usersMap[appt.bcbaId];
+        
+        return {
+          id: appt.id,
+          startTime: appt.startTime,
+          endTime: appt.endTime,
+          serviceType: appt.serviceType,
+          status: appt.status,
+          therapistId: appt.therapistId,
+          bcbaId: appt.bcbaId,
+          patient: appt.Patient ? {
+            id: appt.Patient.id,
+            firstName: appt.Patient.firstName,
+            lastName: appt.Patient.lastName,
+            status: appt.Patient.status
+          } : null,
+          therapist: therapist ? {
+            id: therapist.id,
+            firstName: therapist.firstName,
+            lastName: therapist.lastName,
+            name: `${therapist.firstName} ${therapist.lastName}`
+          } : null,
+          bcba: bcba ? {
+            id: bcba.id,
+            firstName: bcba.firstName,
+            lastName: bcba.lastName,
+            name: `${bcba.firstName} ${bcba.lastName}`
+          } : null,
+          location: appt.Location ? {
+            id: appt.Location.id,
+            name: appt.Location.name
+          } : null
+        };
+      })
+    });
+    
+  } catch (error) {
+    console.error('Team schedule error:', error);
+    return res.status(500).json({ 
+      message: 'Error fetching team schedule', 
+      error: error.message,
+      stack: error.stack 
+    });
+  }
+};
+
 module.exports = {
   getSchedule,
   getPatientSchedule,
@@ -641,5 +835,6 @@ module.exports = {
   updateAppointment,
   deleteAppointment,
   getNextAvailableSlot,
-  findNextAvailableSlot // Export for internal use by other controllers
+  findNextAvailableSlot,
+  getTeamSchedule
 };

@@ -1,0 +1,8 @@
+const path = require('path');
+
+module.exports = {
+  'config': path.resolve('schedulist/src/config', 'db.config.js'),
+  'models-path': path.resolve('schedulist/src/models'),
+  'seeders-path': path.resolve('schedulist/src/seeders'),
+  'migrations-path': path.resolve('schedulist/src/migrations')
+};

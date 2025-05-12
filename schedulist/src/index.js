@@ -14,6 +14,7 @@ const patientRoutes = require('./routes/patient.routes');
 const scheduleRoutes = require('./routes/schedule.routes');
 const adminRoutes = require('./routes/admin.routes');
 const organizationRoutes = require('./routes/organization.routes');
+const proxyRoutes = require('./routes/proxy.routes');
 
 // Load environment variables
 dotenv.config();
@@ -40,6 +41,7 @@ app.use('/api/patient', patientRoutes);
 app.use('/api/schedule', scheduleRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/organization', organizationRoutes);
+app.use('/api/proxy', proxyRoutes);
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

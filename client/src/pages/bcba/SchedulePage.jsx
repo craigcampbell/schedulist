@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '../../context/auth-context';
 import { format, addDays, subDays, startOfDay, isSameDay, parseISO, addMinutes } from 'date-fns';
 import { 
   Calendar, 
@@ -11,7 +12,9 @@ import {
   Plus,
   Check,
   X,
-  Info
+  Info,
+  Users,
+  Settings
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -19,14 +22,31 @@ import {
   getSchedule, 
   createAppointment, 
   createAppointmentNextSlot, 
-  findNextAvailableSlot 
+  findNextAvailableSlot,
+  getTeamSchedule
 } from '../../api/schedule';
-import { getTherapists } from '../../api/bcba';
+import { getTherapists, getAvailableBCBAs } from '../../api/bcba';
 import { getPatients } from '../../api/patients';
 import { getLocations } from '../../api/admin';
 import { calculateAppointmentStyle, formatTime, generateTimeSlots } from '../../utils/date-utils';
+import TeamScheduleView from '../../components/schedule/TeamScheduleView';
+import EnhancedScheduleView from '../../components/schedule/EnhancedScheduleView';
 
 export default function BCBASchedulePage() {
+  // Import auth context to get user info
+  const { user } = useAuth();
+  
+  // Get user's default location
+  const getUserDefaultLocation = () => {
+    if (user?.defaultLocationId) {
+      return user.defaultLocationId;
+    }
+    if (user?.organization?.locations?.length > 0) {
+      return user.organization.locations[0].id;
+    }
+    return null;
+  };
+  
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewType, setViewType] = useState('daily');
   const [selectedTherapist, setSelectedTherapist] = useState(null);
@@ -39,12 +59,13 @@ export default function BCBASchedulePage() {
   const [isCheckingAvailability, setIsCheckingAvailability] = useState(false);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
   
-  // Form state for new appointment
+  // Form state for new appointment with default location
+  const defaultLocation = getUserDefaultLocation();
   const [formState, setFormState] = useState({
     patientId: '',
     therapistId: '',
-    bcbaId: '',
-    locationId: '',
+    bcbaId: user?.id || '', // Default to current user if they're a BCBA
+    locationId: defaultLocation || '',
     date: format(new Date(), 'yyyy-MM-dd'),
     startTime: '08:00',
     endTime: '08:30',
@@ -74,8 +95,8 @@ export default function BCBASchedulePage() {
       setFormState({
         patientId: '',
         therapistId: '',
-        bcbaId: '',
-        locationId: '',
+        bcbaId: user?.id || '', // Default to current user if they're a BCBA
+        locationId: defaultLocation || '',
         date: format(new Date(), 'yyyy-MM-dd'),
         startTime: '08:00',
         endTime: '08:30',
@@ -97,7 +118,7 @@ export default function BCBASchedulePage() {
       });
       setFormError(null);
     }
-  }, [showAppointmentForm]);
+  }, [showAppointmentForm, user, defaultLocation]);
   
   // Check next available slot
   const handleCheckNextAvailable = async () => {
@@ -258,6 +279,12 @@ export default function BCBASchedulePage() {
     queryFn: getTherapists,
   });
   
+  // Fetch BCBAs data
+  const { data: bcbas, isLoading: isLoadingBCBAs } = useQuery({
+    queryKey: ['available-bcbas'],
+    queryFn: getAvailableBCBAs,
+  });
+  
   // Fetch locations data
   const { data: locations, isLoading: isLoadingLocations } = useQuery({
     queryKey: ['locations'],
@@ -285,13 +312,21 @@ export default function BCBASchedulePage() {
       selectedLocation, 
       selectedTherapist
     ),
+    enabled: viewType === 'daily' || viewType === 'weekly'
+  });
+  
+  // Fetch team schedule data
+  const { data: teamScheduleData, isLoading: isLoadingTeamSchedule, error: teamScheduleError } = useQuery({
+    queryKey: ['teamSchedule', selectedDate.toISOString()],
+    queryFn: () => getTeamSchedule(selectedDate.toISOString()),
+    enabled: viewType === 'team' || viewType === 'enhanced'
   });
   
   // Navigate to previous day/week
   const navigatePrevious = () => {
     if (viewType === 'daily') {
       setSelectedDate(subDays(selectedDate, 1));
-    } else if (viewType === 'weekly') {
+    } else if (viewType === 'weekly' || viewType === 'team' || viewType === 'enhanced') {
       setSelectedDate(subDays(selectedDate, 7));
     }
   };
@@ -300,7 +335,7 @@ export default function BCBASchedulePage() {
   const navigateNext = () => {
     if (viewType === 'daily') {
       setSelectedDate(addDays(selectedDate, 1));
-    } else if (viewType === 'weekly') {
+    } else if (viewType === 'weekly' || viewType === 'team' || viewType === 'enhanced') {
       setSelectedDate(addDays(selectedDate, 7));
     }
   };
@@ -310,9 +345,17 @@ export default function BCBASchedulePage() {
     setSelectedDate(new Date());
   };
   
-  // Toggle between daily and weekly views
+  // Toggle between daily, weekly, and team views
   const toggleViewType = () => {
-    setViewType(viewType === 'daily' ? 'weekly' : 'daily');
+    if (viewType === 'daily') {
+      setViewType('weekly');
+    } else if (viewType === 'weekly') {
+      setViewType('team');
+    } else if (viewType === 'team') {
+      setViewType('enhanced');
+    } else {
+      setViewType('daily');
+    }
   };
   
   // Toggle filters visibility
@@ -395,7 +438,9 @@ export default function BCBASchedulePage() {
   const patientGroups = groupAppointmentsByPatient();
   
   // Loading state
-  const isLoading = isLoadingTherapists || isLoadingLocations || isLoadingSchedule || isLoadingPatients;
+  const isLoading = isLoadingTherapists || isLoadingLocations || isLoadingPatients || isLoadingBCBAs ||
+                  ((viewType === 'daily' || viewType === 'weekly') && isLoadingSchedule) || 
+                  ((viewType === 'team' || viewType === 'enhanced') && isLoadingTeamSchedule);
   
   return (
     <div className="h-full flex flex-col">
@@ -426,6 +471,16 @@ export default function BCBASchedulePage() {
               <>
                 <Calendar className="h-4 w-4 mr-2" />
                 <span>Weekly</span>
+              </>
+            ) : viewType === 'weekly' ? (
+              <>
+                <Users className="h-4 w-4 mr-2" />
+                <span>Team</span>
+              </>
+            ) : viewType === 'team' ? (
+              <>
+                <Settings className="h-4 w-4 mr-2" />
+                <span>Enhanced</span>
               </>
             ) : (
               <>
@@ -723,9 +778,9 @@ export default function BCBASchedulePage() {
             {/* Group by therapist */}
             {Object.values(therapistGroups).length > 0 ? (
               Object.values(therapistGroups).map((group) => (
-                <div key={group.therapist.id} className="border rounded-lg overflow-hidden">
+                <div key={group.therapist?.id || 'unknown'} className="border rounded-lg overflow-hidden">
                   <div className="bg-blue-50 dark:bg-blue-900/20 p-3 border-b">
-                    <h3 className="font-semibold">{group.therapist.name}</h3>
+                    <h3 className="font-semibold">{group.therapist?.name || 'Unknown Therapist'}</h3>
                   </div>
                   <div className="divide-y">
                     {group.appointments.map(appointment => (
@@ -737,23 +792,23 @@ export default function BCBASchedulePage() {
                         <div className="flex justify-between items-start">
                           <div>
                             <h4 className="font-medium">
-                              {appointment.patient.firstName} {appointment.patient.lastInitial}.
+                              {appointment.patient?.firstName || 'Unknown'} {appointment.patient?.lastInitial || ''}{appointment.patient?.lastInitial ? '.' : ''}
                             </h4>
                             <p className="text-sm text-gray-600 dark:text-gray-400">
-                              {format(parseISO(appointment.startTime), 'EEEE, MMMM d')}
+                              {appointment?.startTime ? format(parseISO(appointment.startTime), 'EEEE, MMMM d') : 'Unknown date'}
                             </p>
                             <p className="text-sm text-gray-600 dark:text-gray-400">
-                              {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
+                              {appointment?.startTime ? formatTime(appointment.startTime) : 'N/A'} - {appointment?.endTime ? formatTime(appointment.endTime) : 'N/A'}
                             </p>
                           </div>
                           <div className="text-sm px-2 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">
-                            {appointment.status}
+                            {appointment?.status || 'Unknown'}
                           </div>
                         </div>
                         
                         <div className="mt-2 flex items-center text-sm text-gray-600 dark:text-gray-400">
                           <User className="h-4 w-4 mr-1" />
-                          <span>{appointment.location?.name || 'No location'}</span>
+                          <span>{appointment?.location?.name || 'No location'}</span>
                         </div>
                       </div>
                     ))}
@@ -767,6 +822,69 @@ export default function BCBASchedulePage() {
               </div>
             )}
           </div>
+        </div>
+      )}
+      
+      {/* Team View */}
+      {!isLoading && viewType === 'team' && (
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingTeamSchedule ? (
+            <div className="flex justify-center items-center h-full">
+              <p>Loading team schedule...</p>
+            </div>
+          ) : teamScheduleError ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <p className="text-red-500 mb-4">Failed to load team schedule</p>
+              <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
+            </div>
+          ) : teamScheduleData?.appointments?.length > 0 || teamScheduleData?.teams?.length > 0 ? (
+            <TeamScheduleView 
+              teams={teamScheduleData.teams || []} 
+              appointments={teamScheduleData.appointments || []} 
+              selectedDate={selectedDate}
+              showLocationView={teamScheduleData.teams?.length === 0}
+            />
+          ) : (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <Users className="h-12 w-12 mx-auto mb-4 opacity-30" />
+              <p>No appointments found for this date range.</p>
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* Enhanced View */}
+      {!isLoading && viewType === 'enhanced' && (
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingTeamSchedule ? (
+            <div className="flex justify-center items-center h-full">
+              <p>Loading team schedule...</p>
+            </div>
+          ) : teamScheduleError ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <p className="text-red-500 mb-4">Failed to load team schedule</p>
+              <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
+            </div>
+          ) : teamScheduleData?.appointments?.length > 0 || teamScheduleData?.teams?.length > 0 ? (
+            <EnhancedScheduleView 
+              teams={teamScheduleData.teams || []} 
+              appointments={teamScheduleData.appointments || []} 
+              selectedDate={selectedDate}
+              onAppointmentClick={handleAppointmentClick}
+              showLocationView={teamScheduleData.teams?.length === 0}
+              onAppointmentUpdate={(updatedAppointment) => {
+                console.log('Appointment update requested:', updatedAppointment);
+                // Here you would add the actual mutation to update the appointment
+                // For now, we'll just show a message that this feature is coming soon
+                alert('Drag and drop rescheduling is coming soon!');
+              }}
+            />
+          ) : (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <Users className="h-12 w-12 mx-auto mb-4 opacity-30" />
+              <p>No appointments found for this date range.</p>
+            </div>
+          )}
         </div>
       )}
       
@@ -784,33 +902,43 @@ export default function BCBASchedulePage() {
             <div className="space-y-4">
               <div>
                 <h3 className="font-medium text-gray-700 dark:text-gray-300">Patient</h3>
-                <p className="text-lg">{selectedAppointment.patient.firstName} {selectedAppointment.patient.lastInitial}.</p>
+                <p className="text-lg">
+                  {selectedAppointment?.patient?.firstName || 'Unknown'} 
+                  {selectedAppointment?.patient?.lastInitial ? `${selectedAppointment.patient.lastInitial}.` : ''}
+                </p>
               </div>
               
               <div>
                 <h3 className="font-medium text-gray-700 dark:text-gray-300">Therapist</h3>
-                <p className="text-lg">{selectedAppointment.therapist.name}</p>
+                <p className="text-lg">
+                  {selectedAppointment?.therapist?.name || 
+                   `${selectedAppointment?.therapist?.firstName || ''} ${selectedAppointment?.therapist?.lastName || ''}` || 
+                   'Unknown'}
+                </p>
               </div>
               
               <div>
                 <h3 className="font-medium text-gray-700 dark:text-gray-300">Date & Time</h3>
-                <p>{format(parseISO(selectedAppointment.startTime), 'PPPP')}</p>
-                <p>{formatTime(selectedAppointment.startTime)} - {formatTime(selectedAppointment.endTime)}</p>
+                <p>{selectedAppointment?.startTime ? format(parseISO(selectedAppointment.startTime), 'PPPP') : 'Unknown date'}</p>
+                <p>
+                  {selectedAppointment?.startTime ? formatTime(selectedAppointment.startTime) : 'N/A'} - 
+                  {selectedAppointment?.endTime ? formatTime(selectedAppointment.endTime) : 'N/A'}
+                </p>
               </div>
               
               <div>
                 <h3 className="font-medium text-gray-700 dark:text-gray-300">Location</h3>
-                <p>{selectedAppointment.location?.name || 'No location'}</p>
+                <p>{selectedAppointment?.location?.name || 'No location'}</p>
               </div>
               
               <div>
                 <h3 className="font-medium text-gray-700 dark:text-gray-300">Status</h3>
                 <div className="inline-block px-2 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">
-                  {selectedAppointment.status}
+                  {selectedAppointment?.status || 'Unknown'}
                 </div>
               </div>
               
-              {selectedAppointment.notes && (
+              {selectedAppointment?.notes && (
                 <div>
                   <h3 className="font-medium text-gray-700 dark:text-gray-300">Notes</h3>
                   <p className="text-gray-600 dark:text-gray-400">{selectedAppointment.notes}</p>
@@ -904,11 +1032,15 @@ export default function BCBASchedulePage() {
                     required
                   >
                     <option value="">Select a BCBA</option>
-                    {therapists?.filter(t => t.roles.includes('bcba')).map(bcba => (
-                      <option key={bcba.id} value={bcba.id}>
-                        {bcba.firstName} {bcba.lastName}
-                      </option>
-                    ))}
+                    {bcbas && bcbas.length > 0 ? (
+                      bcbas.map(bcba => (
+                        <option key={bcba.id} value={bcba.id}>
+                          {bcba.firstName} {bcba.lastName}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>Loading BCBAs...</option>
+                    )}
                   </select>
                 </div>
                 

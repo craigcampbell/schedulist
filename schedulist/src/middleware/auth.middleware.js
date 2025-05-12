@@ -118,6 +118,16 @@ const hasPatientAccess = async (req, res, next) => {
   }
 };
 
+const hasRole = (role) => {
+  return (req, res, next) => {
+    if (req.user && req.user.roles.includes(role)) {
+      return next();
+    }
+
+    return res.status(403).json({ message: `Requires ${role} role` });
+  };
+};  
+
 /**
  * Middleware to check if organization has an active subscription
  */
@@ -178,6 +188,54 @@ const tenantResolver = (req, res, next) => {
   return res.redirect(302, redirectUrl);
 };
 
+const authenticate = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({ message: 'No token provided' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findByPk(decoded.id, {
+      include: [
+        { model: Organization },
+        { model: Role }
+      ]
+    });
+
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid token' });
+    }
+
+    if (!user.active) {
+      return res.status(403).json({ message: 'User account is inactive' });
+    }
+
+    // Attach user info to the request
+    req.user = {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      roles: user.Roles.map(role => role.name),
+      organizationId: user.organizationId,
+      organization: user.Organization ? {
+        id: user.Organization.id,
+        name: user.Organization.name,
+        slug: user.Organization.slug,
+        logoUrl: user.Organization.logoUrl,
+        subscriptionActive: user.Organization.subscriptionActive
+      } : null,
+      isSuperAdmin: user.isSuperAdmin
+    };
+    next();
+  } catch (error) {
+    console.error('Authentication error:', error);
+    return res.status(401).json({ message: 'Invalid token', error: error.message });
+  }
+};
+
 /**
  * Middleware to extract organization from subdomain
  */
@@ -226,5 +284,7 @@ module.exports = {
   hasPatientAccess,
   hasActiveSubscription,
   tenantResolver,
-  subdomainExtractor
+  subdomainExtractor,
+  hasRole, 
+  authenticate
 };

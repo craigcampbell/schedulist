@@ -14,6 +14,14 @@ export const getSchedule = async (view = 'daily', date, locationId, therapistId,
   return response.data;
 };
 
+// Get team-based schedule
+export const getTeamSchedule = async (date) => {
+  const response = await apiClient.get('/schedule/teams', {
+    params: { date }
+  });
+  return response.data;
+};
+
 // Get a specific patient's schedule
 export const getPatientSchedule = async (patientId, limit, includePast) => {
   const response = await apiClient.get(`/schedule/patient/${patientId}`, {
