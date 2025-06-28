@@ -39,6 +39,14 @@ export const createAppointment = async (appointmentData) => {
   return response.data;
 };
 
+// Update appointment therapist assignment
+export const updateAppointmentTherapist = async (appointmentId, therapistId) => {
+  const response = await apiClient.put(`/schedule/${appointmentId}/therapist`, {
+    therapistId
+  });
+  return response.data;
+};
+
 // Find next available slot for a therapist
 export const findNextAvailableSlot = async (therapistId, locationId, preferredDate = null, durationMinutes = 30) => {
   const params = {
@@ -82,6 +90,14 @@ export const updateAppointmentStatus = async (id, status, notes) => {
   const response = await apiClient.put(`/therapist/appointments/${id}/status`, { 
     status, 
     notes 
+  });
+  return response.data;
+};
+
+// Get therapist's schedule
+export const getTherapistSchedule = async (date) => {
+  const response = await apiClient.get('/therapist/schedule', {
+    params: { date }
   });
   return response.data;
 };

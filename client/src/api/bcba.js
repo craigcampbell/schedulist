@@ -49,11 +49,25 @@ export const getPatientsWithAssignments = async () => {
     return response.data;
   } catch (error) {
     console.error('Error fetching patients with assignments:', error);
+    console.error('Error response:', error.response?.data);
+    console.error('Error status:', error.response?.status);
+    
     // Return empty array instead of throwing
     if (error.response && error.response.status === 401) {
       // If unauthorized, let the auth interceptor handle redirect
       throw error;
     }
+    return [];
+  }
+};
+
+// Get all patients in organization (simpler endpoint for debugging)
+export const getAllPatients = async () => {
+  try {
+    const response = await apiClient.get('/patient');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching all patients:', error);
     return [];
   }
 };

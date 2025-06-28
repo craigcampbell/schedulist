@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useAuth } from '../../context/auth-context';
 import { format, addDays, subDays, startOfDay, isSameDay } from 'date-fns';
 import { 
   Calendar, 
@@ -11,11 +12,12 @@ import {
   Users
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
-import { getSchedule, getTeamSchedule } from '../../api/schedule';
+import { getTherapistSchedule, getTeamSchedule } from '../../api/schedule';
 import { calculateAppointmentStyle, formatTime } from '../../utils/date-utils';
 import EnhancedScheduleView from '../../components/schedule/EnhancedScheduleView';
 
 export default function TherapistSchedulePage() {
+  const { user } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewType, setViewType] = useState('daily');
   const [selectedAppointment, setSelectedAppointment] = useState(null);
@@ -24,7 +26,7 @@ export default function TherapistSchedulePage() {
   // Fetch schedule data
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['therapistSchedule', viewType, selectedDate],
-    queryFn: () => getSchedule(viewType, selectedDate.toISOString()),
+    queryFn: () => getTherapistSchedule(7), // Get next 7 days
     enabled: viewType === 'daily' || viewType === 'weekly'
   });
   
@@ -39,7 +41,7 @@ export default function TherapistSchedulePage() {
   const navigatePrevious = () => {
     if (viewType === 'daily') {
       setSelectedDate(subDays(selectedDate, 1));
-    } else if (viewType === 'weekly') {
+    } else if (viewType === 'weekly' || viewType === 'enhanced') {
       setSelectedDate(subDays(selectedDate, 7));
     }
   };
@@ -48,7 +50,7 @@ export default function TherapistSchedulePage() {
   const navigateNext = () => {
     if (viewType === 'daily') {
       setSelectedDate(addDays(selectedDate, 1));
-    } else if (viewType === 'weekly') {
+    } else if (viewType === 'weekly' || viewType === 'enhanced') {
       setSelectedDate(addDays(selectedDate, 7));
     }
   };
@@ -93,6 +95,20 @@ export default function TherapistSchedulePage() {
       const appointmentDate = new Date(appointment.startTime);
       return isSameDay(appointmentDate, selectedDate);
     });
+  };
+  
+  // Format patient name for display
+  const formatPatientName = (patient) => {
+    if (!patient) return 'Unknown';
+    const firstTwo = patient.firstName?.substring(0, 2) || '--';
+    const lastTwo = patient.lastName?.substring(0, 2) || '--';
+    return `${firstTwo}${lastTwo}`;
+  };
+
+  // Format full patient name for hover/tooltip
+  const formatFullPatientName = (patient) => {
+    if (!patient) return 'Unknown';
+    return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
   };
   
   return (
@@ -205,7 +221,14 @@ export default function TherapistSchedulePage() {
                     <div className="text-xs font-medium">
                       {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
                     </div>
-                    <div className="font-medium truncate">{appointment.patient.firstName} {appointment.patient.lastInitial}.</div>
+                    <div className="font-medium truncate">
+                      <span 
+                        title={formatFullPatientName(appointment.patient)}
+                        className="cursor-help"
+                      >
+                        {formatPatientName(appointment.patient)}
+                      </span>
+                    </div>
                   </div>
                 );
               })}
@@ -227,7 +250,12 @@ export default function TherapistSchedulePage() {
                 <div className="flex justify-between items-start">
                   <div>
                     <h3 className="font-medium">
-                      {appointment.patient.firstName} {appointment.patient.lastInitial}.
+                      <span 
+                        title={formatFullPatientName(appointment.patient)}
+                        className="cursor-help"
+                      >
+                        {formatPatientName(appointment.patient)}
+                      </span>
                     </h3>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
                       {format(new Date(appointment.startTime), 'EEEE, MMMM d')}
@@ -267,6 +295,7 @@ export default function TherapistSchedulePage() {
               appointments={teamScheduleData.appointments || []} 
               selectedDate={selectedDate}
               onAppointmentClick={handleAppointmentClick}
+              userRole="therapist"
               onAppointmentUpdate={(updatedAppointment) => {
                 console.log('Appointment update requested:', updatedAppointment);
                 // Here you would add the actual mutation to update the appointment
@@ -296,7 +325,9 @@ export default function TherapistSchedulePage() {
             <div className="space-y-4">
               <div>
                 <h3 className="font-medium text-gray-700 dark:text-gray-300">Patient</h3>
-                <p className="text-lg">{selectedAppointment.patient.firstName} {selectedAppointment.patient.lastInitial}.</p>
+                <p className="text-lg">
+                  {formatFullPatientName(selectedAppointment.patient)}
+                </p>
               </div>
               
               <div>

@@ -67,7 +67,7 @@ export const generateTimeSlots = (startHour = 8, endHour = 18, intervalMinutes =
 };
 
 // Calculate appointment position and height for calendar display
-export const calculateAppointmentStyle = (appointment, hourHeight = 60) => {
+export const calculateAppointmentStyle = (appointment, hourHeight = 60, startHourOffset = 8) => {
   const start = new Date(appointment.startTime);
   const end = new Date(appointment.endTime);
   
@@ -76,8 +76,12 @@ export const calculateAppointmentStyle = (appointment, hourHeight = 60) => {
   const endHour = end.getHours();
   const endMinute = end.getMinutes();
   
-  const top = (startHour * 60 + startMinute) * (hourHeight / 60);
-  const height = ((endHour * 60 + endMinute) - (startHour * 60 + startMinute)) * (hourHeight / 60);
+  // Adjust for the calendar starting at a specific hour (e.g., 8 AM)
+  const adjustedStartMinutes = (startHour - startHourOffset) * 60 + startMinute;
+  const durationMinutes = (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+  
+  const top = adjustedStartMinutes * (hourHeight / 60);
+  const height = durationMinutes * (hourHeight / 60);
   
   return {
     top: `${top}px`,

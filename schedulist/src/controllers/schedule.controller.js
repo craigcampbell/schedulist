@@ -73,27 +73,34 @@ const getSchedule = async (req, res) => {
       }
     }
     
-    // Fetch appointments
+    // Fetch appointments with organization filtering
     const appointments = await Appointment.findAll({
       where,
       include: [
         {
           model: Patient,
-          attributes: ['id', 'firstName', 'lastName', 'status'],
+          where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+          required: false
         },
         {
           model: User,
           as: 'Therapist',
-          attributes: ['id', 'firstName', 'lastName']
+          attributes: ['id', 'firstName', 'lastName'],
+          where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+          required: false
         },
         {
           model: User,
           as: 'BCBA',
-          attributes: ['id', 'firstName', 'lastName']
+          attributes: ['id', 'firstName', 'lastName'],
+          where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+          required: false
         },
         {
           model: Location,
-          attributes: ['id', 'name', 'workingHoursStart', 'workingHoursEnd']
+          attributes: ['id', 'name', 'workingHoursStart', 'workingHoursEnd'],
+          where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+          required: false
         }
       ],
       order: [['startTime', 'ASC']]
@@ -108,9 +115,8 @@ const getSchedule = async (req, res) => {
       status: appt.status,
       patient: appt.Patient ? {
         id: appt.Patient.id,
-        // Only return first name and last initial for privacy
         firstName: appt.Patient.firstName,
-        lastInitial: appt.Patient.lastName ? appt.Patient.lastName.charAt(0) : '',
+        lastName: appt.Patient.lastName,
         status: appt.Patient.status
       } : null,
       therapist: appt.Therapist ? {
@@ -188,11 +194,15 @@ const getPatientSchedule = async (req, res) => {
         {
           model: User,
           as: 'Therapist',
-          attributes: ['id', 'firstName', 'lastName']
+          attributes: ['id', 'firstName', 'lastName'],
+          where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+          required: false
         },
         {
           model: Location,
-          attributes: ['id', 'name']
+          attributes: ['id', 'name'],
+          where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+          required: false
         }
       ],
       order: includePast ? [['startTime', 'DESC']] : [['startTime', 'ASC']],
@@ -373,16 +383,30 @@ const createAppointment = async (req, res) => {
       useNextAvailableSlot
     } = req.body;
     
+    console.log('Creating appointment with data:', {
+      patientId,
+      therapistId,
+      bcbaId,
+      locationId,
+      startTime,
+      endTime,
+      title,
+      useNextAvailableSlot
+    });
+    
     // Validate patient exists
     const patient = await Patient.findByPk(patientId);
     if (!patient) {
       return res.status(404).json({ message: 'Patient not found' });
     }
     
-    // Validate therapist exists
-    const therapist = await User.findByPk(therapistId);
-    if (!therapist) {
-      return res.status(404).json({ message: 'Therapist not found' });
+    // Validate therapist exists (if provided)
+    let therapist = null;
+    if (therapistId && therapistId !== '') {
+      therapist = await User.findByPk(therapistId);
+      if (!therapist) {
+        return res.status(404).json({ message: 'Therapist not found' });
+      }
     }
     
     // Validate BCBA exists
@@ -401,6 +425,11 @@ const createAppointment = async (req, res) => {
     let appointmentStart, appointmentEnd;
     
     if (useNextAvailableSlot) {
+      // Can only use next available slot if therapist is assigned
+      if (!therapistId || therapistId === '') {
+        return res.status(400).json({ message: 'Cannot find next available slot without a therapist assignment' });
+      }
+      
       // Find the next available slot for this therapist
       const durationMinutes = req.body.durationMinutes || 30; // Default to 30 minutes if not specified
       const slot = await findNextAvailableSlot(
@@ -427,40 +456,42 @@ const createAppointment = async (req, res) => {
         return res.status(400).json({ message: 'Session duration must be at least 30 minutes' });
       }
       
-      // Check for scheduling conflicts
-      const conflictingAppointment = await Appointment.findOne({
-        where: {
-          therapistId,
-          [Op.or]: [
-            {
-              startTime: {
-                [Op.between]: [appointmentStart, appointmentEnd]
+      // Check for scheduling conflicts (only if therapist is assigned)
+      if (therapistId && therapistId !== '') {
+        const conflictingAppointment = await Appointment.findOne({
+          where: {
+            therapistId,
+            [Op.or]: [
+              {
+                startTime: {
+                  [Op.between]: [appointmentStart, appointmentEnd]
+                }
+              },
+              {
+                endTime: {
+                  [Op.between]: [appointmentStart, appointmentEnd]
+                }
+              },
+              {
+                [Op.and]: [
+                  { startTime: { [Op.lte]: appointmentStart } },
+                  { endTime: { [Op.gte]: appointmentEnd } }
+                ]
               }
-            },
-            {
-              endTime: {
-                [Op.between]: [appointmentStart, appointmentEnd]
-              }
-            },
-            {
-              [Op.and]: [
-                { startTime: { [Op.lte]: appointmentStart } },
-                { endTime: { [Op.gte]: appointmentEnd } }
-              ]
-            }
-          ]
+            ]
+          }
+        });
+        
+        if (conflictingAppointment) {
+          return res.status(409).json({ message: 'This time slot conflicts with an existing appointment' });
         }
-      });
-      
-      if (conflictingAppointment) {
-        return res.status(409).json({ message: 'This time slot conflicts with an existing appointment' });
       }
     }
     
     // Create the appointment
     const appointment = await Appointment.create({
       patientId,
-      therapistId,
+      therapistId: therapistId && therapistId !== '' ? therapistId : null, // Allow null therapist
       bcbaId: bcbaId || req.user.id, // Use provided BCBA or current user (who must be a BCBA)
       locationId,
       startTime: appointmentStart,
@@ -471,7 +502,18 @@ const createAppointment = async (req, res) => {
       recurringPattern: recurringPattern || null,
       excludeWeekends: excludeWeekends !== undefined ? excludeWeekends : true,
       excludeHolidays: excludeHolidays !== undefined ? excludeHolidays : true,
-      status: 'scheduled'
+      status: 'scheduled',
+      serviceType: 'direct' // Explicitly set serviceType for patient appointments
+    });
+    
+    console.log('Appointment created:', {
+      id: appointment.id,
+      patientId: appointment.patientId,
+      therapistId: appointment.therapistId,
+      startTime: appointment.startTime,
+      endTime: appointment.endTime,
+      serviceType: appointment.serviceType,
+      status: appointment.status
     });
     
     return res.status(201).json({
@@ -574,6 +616,100 @@ const updateAppointment = async (req, res) => {
 };
 
 /**
+ * Update appointment therapist assignment
+ */
+const updateAppointmentTherapist = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { therapistId } = req.body;
+    
+    const appointment = await Appointment.findByPk(id);
+    
+    if (!appointment) {
+      return res.status(404).json({ message: 'Appointment not found' });
+    }
+    
+    // If therapistId is provided, validate the therapist exists
+    if (therapistId) {
+      const therapist = await User.findByPk(therapistId);
+      if (!therapist) {
+        return res.status(404).json({ message: 'Therapist not found' });
+      }
+      
+      // Check for scheduling conflicts
+      const conflictingAppointment = await Appointment.findOne({
+        where: {
+          id: { [Op.ne]: id },
+          therapistId: therapistId,
+          [Op.or]: [
+            {
+              startTime: {
+                [Op.between]: [appointment.startTime, appointment.endTime]
+              }
+            },
+            {
+              endTime: {
+                [Op.between]: [appointment.startTime, appointment.endTime]
+              }
+            },
+            {
+              [Op.and]: [
+                { startTime: { [Op.lte]: appointment.startTime } },
+                { endTime: { [Op.gte]: appointment.endTime } }
+              ]
+            }
+          ]
+        }
+      });
+      
+      if (conflictingAppointment) {
+        return res.status(409).json({ 
+          message: 'Therapist has a conflicting appointment at this time',
+          conflict: conflictingAppointment
+        });
+      }
+    }
+    
+    // Update the therapist assignment
+    await appointment.update({ therapistId });
+    
+    // Fetch updated appointment with related data
+    const updatedAppointment = await Appointment.findByPk(id, {
+      include: [
+        {
+          model: Patient,
+          as: 'patient',
+          attributes: ['id', 'firstName', 'lastName']
+        },
+        {
+          model: User,
+          as: 'therapist',
+          attributes: ['id', 'firstName', 'lastName']
+        },
+        {
+          model: User,
+          as: 'bcba',
+          attributes: ['id', 'firstName', 'lastName']
+        },
+        {
+          model: Location,
+          as: 'location',
+          attributes: ['id', 'name']
+        }
+      ]
+    });
+    
+    return res.status(200).json({
+      message: 'Therapist assignment updated successfully',
+      appointment: updatedAppointment
+    });
+    
+  } catch (error) {
+    return res.status(500).json({ message: 'Error updating therapist assignment', error: error.message });
+  }
+};
+
+/**
  * Delete an appointment
  */
 const deleteAppointment = async (req, res) => {
@@ -658,19 +794,23 @@ const getTeamSchedule = async (req, res) => {
     // Get teams and their members
     let teams;
     if (isAdmin) {
-      // Admin can see all teams
+      // Admin can see all teams with members in their organization
       teams = await Team.findAll({
         include: [
           {
             model: User,
             as: 'LeadBCBA',
-            attributes: ['id', 'firstName', 'lastName']
+            attributes: ['id', 'firstName', 'lastName'],
+            where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+            required: true // Require lead BCBA to be from same organization
           },
           {
             model: User,
             as: 'Members',
             attributes: ['id', 'firstName', 'lastName'],
-            through: { attributes: [] }
+            where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+            through: { attributes: [] },
+            required: false
           }
         ]
       });
@@ -682,13 +822,17 @@ const getTeamSchedule = async (req, res) => {
           {
             model: User,
             as: 'LeadBCBA',
-            attributes: ['id', 'firstName', 'lastName']
+            attributes: ['id', 'firstName', 'lastName'],
+            where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+            required: false
           },
           {
             model: User,
             as: 'Members',
             attributes: ['id', 'firstName', 'lastName'],
-            through: { attributes: [] }
+            where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+            through: { attributes: [] },
+            required: false
           }
         ]
       });
@@ -699,14 +843,20 @@ const getTeamSchedule = async (req, res) => {
           {
             model: User,
             as: 'LeadBCBA',
-            attributes: ['id', 'firstName', 'lastName']
+            attributes: ['id', 'firstName', 'lastName'],
+            where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+            required: false
           },
           {
             model: User,
             as: 'Members',
             attributes: ['id', 'firstName', 'lastName'],
-            where: { id: userId },
-            through: { attributes: [] }
+            where: { 
+              id: userId,
+              ...(req.user.organizationId ? { organizationId: req.user.organizationId } : {})
+            },
+            through: { attributes: [] },
+            required: true // Must be a member of the team
           }
         ]
       });
@@ -725,22 +875,27 @@ const getTeamSchedule = async (req, res) => {
         team.Members ? team.Members.map(member => member.id) : []
       );
       
+      // Always include the current user if they're a therapist
+      if (!isAdmin && !isBcba && !therapistIds.includes(userId)) {
+        therapistIds.push(userId);
+      }
+      
       if (therapistIds.length > 0) {
         appointmentWhere.therapistId = { [Op.in]: therapistIds };
       }
     } 
-    // If no teams or no therapists in teams, try to filter by location
+    // If no teams, filter based on user role
     else {
-      // Check if user has a defaultLocationId or we can get their organization's locations
-      if (req.user.defaultLocationId) {
-        // Filter by user's default location
-        appointmentWhere.locationId = req.user.defaultLocationId;
-        console.log("No teams - filtering by user's default location:", req.user.defaultLocationId);
-      } 
-      // If we don't have a way to filter, just show all appointments in the date range
-      else {
-        console.log("No teams or default location - showing all appointments in date range");
+      if (!isAdmin) {
+        if (isBcba) {
+          // BCBAs see appointments they supervise
+          appointmentWhere.bcbaId = userId;
+        } else {
+          // Therapists only see their own appointments
+          appointmentWhere.therapistId = userId;
+        }
       }
+      // Admins see all appointments in the organization (no additional filter needed)
     }
     
     // Get appointments based on filtered criteria
@@ -749,11 +904,14 @@ const getTeamSchedule = async (req, res) => {
       include: [
         {
           model: Patient,
-          attributes: ['id', 'firstName', 'lastName', 'status']
+          where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+          required: false
         },
         {
           model: Location,
-          attributes: ['id', 'name']
+          attributes: ['id', 'name'],
+          where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
+          required: false
         }
       ],
       order: [['startTime', 'ASC']]
@@ -767,8 +925,12 @@ const getTeamSchedule = async (req, res) => {
     const userIds = [...new Set([...appointmentTherapistIds, ...appointmentBcbaIds])];
     
     // Fetch all needed users in one query
+    const userWhere = { id: { [Op.in]: userIds } };
+    if (req.user.organizationId) {
+      userWhere.organizationId = req.user.organizationId;
+    }
     const users = userIds.length > 0 ? await User.findAll({
-      where: { id: { [Op.in]: userIds } },
+      where: userWhere,
       attributes: ['id', 'firstName', 'lastName']
     }) : [];
     
@@ -833,6 +995,7 @@ module.exports = {
   getPatientSchedule,
   createAppointment,
   updateAppointment,
+  updateAppointmentTherapist,
   deleteAppointment,
   getNextAvailableSlot,
   findNextAvailableSlot,

@@ -48,7 +48,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     therapistId: {
       type: DataTypes.UUID,
-      allowNull: false,
+      allowNull: true, // Allow null for unassigned appointments
       references: {
         model: 'Users',
         key: 'id'

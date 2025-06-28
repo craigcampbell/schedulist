@@ -26,6 +26,7 @@ const SERVICE_TYPE_COLORS = {
   circle: 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200',
   cleaning: 'bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-200',
   default: 'bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200',
+  uncovered: 'bg-red-500 dark:bg-red-600 text-white animate-pulse',
 };
 
 // Get dynamic time slots based on appointments
@@ -127,7 +128,8 @@ export default function EnhancedScheduleView(props) {
     selectedDate,
     onAppointmentUpdate = () => {},
     onAppointmentClick = () => {},
-    showLocationView = false
+    showLocationView = false,
+    userRole = null // Add userRole prop to determine name display format
   } = props;
   const [expandedTeams, setExpandedTeams] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
@@ -135,7 +137,38 @@ export default function EnhancedScheduleView(props) {
   const [selectedServiceType, setSelectedServiceType] = useState('');
   const [selectedTherapist, setSelectedTherapist] = useState('');
   const [selectedPatient, setSelectedPatient] = useState('');
-  const [useHipaaNames, setUseHipaaNames] = useState(false);
+  
+  // Determine if we should use HIPAA-compliant names based on user role
+  // Therapists see abbreviated names, BCBA/Admin see full names
+  const useHipaaNames = userRole === 'therapist';
+  const [showNameToggle, setShowNameToggle] = useState(false); // Allow manual toggle for BCBA/Admin only
+  
+  // Get service code for display
+  const getAppointmentServiceType = (appointment) => {
+    if (!appointment) return null;
+    
+    // Extract the first word from the appointment title/serviceType if exists
+    const serviceType = appointment.serviceType || 
+                      (appointment.title || "").split(' ')[0].toLowerCase();
+    
+    if (serviceType) {
+      // Map common words to service types
+      const serviceMap = {
+        direct: "direct",
+        supervision: "supervision",
+        indirect: "indirect",
+        lunch: "lunch",
+        circle: "circle",
+        "no-ow": "noOw",
+        noow: "noOw",
+        cleaning: "cleaning"
+      };
+      
+      return serviceMap[serviceType.toLowerCase()] || "direct";
+    }
+    
+    return "direct"; // Default
+  };
   
   // Compute all therapists from teams
   const allTherapists = useMemo(() => {
@@ -193,17 +226,20 @@ export default function EnhancedScheduleView(props) {
     }
   };
   
-  // Format patient name based on HIPAA settings
+  // Format patient name based on user role and HIPAA settings
   const formatPatientName = (patient) => {
     if (!patient) return 'Unknown';
     
-    if (useHipaaNames) {
-      const firstInitials = patient.firstName?.substring(0, 2) || '--';
-      const lastInitials = patient.lastName?.substring(0, 2) || '--';
-      return `${firstInitials}${lastInitials}`;
-    } else {
-      return `${patient.firstName || 'Unknown'} ${patient.lastName ? patient.lastName.charAt(0) + '.' : ''}`;
-    }
+    // For all roles in enhanced schedule view, show abbreviated names (first 2 + last 2 chars)
+    const firstTwo = patient.firstName?.substring(0, 2) || '--';
+    const lastTwo = patient.lastName?.substring(0, 2) || '--';
+    return `${firstTwo}${lastTwo}`;
+  };
+
+  // Format full patient name for hover/tooltip
+  const formatFullPatientName = (patient) => {
+    if (!patient) return 'Unknown';
+    return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
   };
 
   // Group appointments by therapist
@@ -238,32 +274,50 @@ export default function EnhancedScheduleView(props) {
     );
   };
 
-  // Get service code for display
-  const getAppointmentServiceType = (appointment) => {
-    if (!appointment) return null;
+  // Find uncovered patient slots (patients scheduled without therapist coverage)
+  const findUncoveredPatients = useMemo(() => {
+    if (!appointments || !Array.isArray(appointments)) return [];
     
-    // Extract the first word from the appointment title/serviceType if exists
-    const serviceType = appointment.serviceType || 
-                      (appointment.title || "").split(' ')[0].toLowerCase();
+    const uncoveredSlots = [];
     
-    if (serviceType) {
-      // Map common words to service types
-      const serviceMap = {
-        direct: "direct",
-        supervision: "supervision",
-        indirect: "indirect",
-        lunch: "lunch",
-        circle: "circle",
-        "no-ow": "noOw",
-        noow: "noOw",
-        cleaning: "cleaning"
-      };
-      
-      return serviceMap[serviceType.toLowerCase()] || "direct";
-    }
+    appointments.forEach(appointment => {
+      // Check if this is a patient appointment without proper therapist coverage
+      if (appointment.patient && appointment.therapistId) {
+        const startTime = new Date(appointment.startTime);
+        const endTime = new Date(appointment.endTime);
+        
+        // Check if appointment is on selected date
+        if (isSameDay(startTime, new Date(selectedDate))) {
+          // Check if therapist is scheduled during this time (simplified check)
+          const therapistConflicts = appointments.filter(otherApp => 
+            otherApp.therapistId === appointment.therapistId &&
+            otherApp.id !== appointment.id &&
+            isSameDay(new Date(otherApp.startTime), new Date(selectedDate)) &&
+            (
+              (new Date(otherApp.startTime) <= startTime && new Date(otherApp.endTime) > startTime) ||
+              (new Date(otherApp.startTime) < endTime && new Date(otherApp.endTime) >= endTime) ||
+              (new Date(otherApp.startTime) >= startTime && new Date(otherApp.endTime) <= endTime)
+            )
+          );
+          
+          // For now, mark as uncovered if patient needs coverage during location hours
+          // but is outside typical coverage (simplified logic)
+          const hour = startTime.getHours();
+          const isOutsideNormalHours = hour < 8 || hour > 17;
+          
+          if (isOutsideNormalHours || therapistConflicts.length > 1) {
+            uncoveredSlots.push({
+              ...appointment,
+              isUncovered: true,
+              reason: isOutsideNormalHours ? 'Outside normal hours' : 'Therapist conflict'
+            });
+          }
+        }
+      }
+    });
     
-    return "direct"; // Default
-  };
+    return uncoveredSlots;
+  }, [appointments, selectedDate]);
 
   // Toggle team expanded/collapsed
   const toggleTeam = (teamId) => {
@@ -420,16 +474,18 @@ export default function EnhancedScheduleView(props) {
             <ChevronDown className={`h-4 w-4 ml-1 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
           </Button>
           
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setUseHipaaNames(!useHipaaNames)}
-            title={useHipaaNames ? "Show full name" : "Use HIPAA-compliant names"}
-            className="flex items-center"
-          >
-            <Eye className="h-4 w-4 mr-1" />
-            {useHipaaNames ? "HIPAA Mode" : "Full Names"}
-          </Button>
+          {(userRole === 'bcba' || userRole === 'admin') && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowNameToggle(!showNameToggle)}
+              title={showNameToggle ? "Show full names" : "Use HIPAA-compliant names"}
+              className="flex items-center"
+            >
+              <Eye className="h-4 w-4 mr-1" />
+              {showNameToggle ? "HIPAA Mode" : "Full Names"}
+            </Button>
+          )}
         </div>
       </div>
       
@@ -581,6 +637,10 @@ export default function EnhancedScheduleView(props) {
                               {team.Members?.map(member => {
                                 const therapistApps = filterAppointments(getTherapistAppointments(member.id));
                                 const appointmentsInSlot = therapistApps.filter(app => isAppointmentInTimeSlot(app, timeSlot));
+                                const uncoveredInSlot = findUncoveredPatients.filter(app => 
+                                  isAppointmentInTimeSlot(app, timeSlot) && app.therapistId === member.id
+                                );
+                                const hasUncovered = uncoveredInSlot.length > 0;
                                 
                                 return (
                                   <Draggable 
@@ -592,22 +652,41 @@ export default function EnhancedScheduleView(props) {
                                     {(provided, snapshot) => (
                                       <div 
                                         className={cn(
-                                          "p-2 border-r dark:border-gray-700 min-h-[2.5rem] text-center text-sm",
+                                          "p-2 border-r dark:border-gray-700 min-h-[2.5rem] text-center text-sm relative",
                                           appointmentsInSlot.length > 0 && "cursor-pointer hover:opacity-80",
-                                          appointmentsInSlot[0] && SERVICE_TYPE_COLORS[getAppointmentServiceType(appointmentsInSlot[0]) || 'default'],
+                                          hasUncovered 
+                                            ? SERVICE_TYPE_COLORS.uncovered
+                                            : appointmentsInSlot[0] && SERVICE_TYPE_COLORS[getAppointmentServiceType(appointmentsInSlot[0]) || 'default'],
                                           snapshot.isDragging && "opacity-70 shadow-md",
                                           searchQuery && appointmentsInSlot.length > 0 && "ring-2 ring-yellow-400 dark:ring-yellow-600"
                                         )}
                                         onClick={appointmentsInSlot[0] ? () => onAppointmentClick(appointmentsInSlot[0]) : undefined}
-                                        title={appointmentsInSlot[0] ? `${appointmentsInSlot[0].patient?.firstName || 'Patient'} - ${formatTime(appointmentsInSlot[0].startTime)} to ${formatTime(appointmentsInSlot[0].endTime)}` : ''}
+                                        title={
+                                          hasUncovered 
+                                            ? `⚠️ UNCOVERED: ${formatFullPatientName(uncoveredInSlot[0].patient)} - ${uncoveredInSlot[0].reason}`
+                                            : appointmentsInSlot[0] 
+                                              ? `${formatFullPatientName(appointmentsInSlot[0].patient)} - ${formatTime(appointmentsInSlot[0].startTime)} to ${formatTime(appointmentsInSlot[0].endTime)}`
+                                              : ''
+                                        }
                                         ref={provided.innerRef}
                                         {...provided.draggableProps}
                                         {...provided.dragHandleProps}
                                       >
                                         {appointmentsInSlot.length > 0 && (
                                           <div className="font-medium">
-                                            {formatPatientName(appointmentsInSlot[0].patient)}
+                                            {hasUncovered && <span className="text-xs">⚠️ </span>}
+                                            <span 
+                                              title={formatFullPatientName(appointmentsInSlot[0].patient)}
+                                              className="cursor-help"
+                                            >
+                                              {formatPatientName(appointmentsInSlot[0].patient)}
+                                            </span>
                                             {appointmentsInSlot.length > 1 && ` +${appointmentsInSlot.length - 1}`}
+                                          </div>
+                                        )}
+                                        {hasUncovered && (
+                                          <div className="absolute top-0 right-0 -mt-1 -mr-1">
+                                            <div className="w-3 h-3 bg-red-600 rounded-full animate-ping" />
                                           </div>
                                         )}
                                       </div>
@@ -649,7 +728,12 @@ export default function EnhancedScheduleView(props) {
                             <div className="flex justify-between items-start">
                               <div>
                                 <div className="font-medium">
-                                  {formatPatientName(app.patient)}
+                                  <span 
+                                    title={formatFullPatientName(app.patient)}
+                                    className="cursor-help"
+                                  >
+                                    {formatPatientName(app.patient)}
+                                  </span>
                                 </div>
                                 <div className="text-sm text-gray-500 dark:text-gray-400">
                                   with {member.firstName} {member.lastName}
@@ -716,7 +800,12 @@ export default function EnhancedScheduleView(props) {
                               <div className="flex justify-between items-start">
                                 <div>
                                   <div className="font-medium">
-                                    {formatPatientName(app.patient)}
+                                    <span 
+                                      title={formatFullPatientName(app.patient)}
+                                      className="cursor-help"
+                                    >
+                                      {formatPatientName(app.patient)}
+                                    </span>
                                   </div>
                                   <div className="text-sm text-gray-500 dark:text-gray-400">
                                     with {member.firstName} {member.lastName}

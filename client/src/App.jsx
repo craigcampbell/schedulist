@@ -175,6 +175,16 @@ function AppRoutes() {
             <SubscriptionPage />
           </ProtectedRoute>
         } />
+        <Route path="/admin/patients" element={
+          <ProtectedRoute requiredRoles={['admin']} requireSubscription={false}>
+            <BCBAPatientsPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/schedule" element={
+          <ProtectedRoute requiredRoles={['admin']} requireSubscription={false}>
+            <BCBASchedulePage />
+          </ProtectedRoute>
+        } />
         
         <Route path="/profile" element={
           <ProtectedRoute requireSubscription={false}>

@@ -10,6 +10,7 @@
     "server": "node schedulist/src/index.js",
     "dev:full": "concurrently \"npm run server\" \"npm run client\"",
     "db:seed": "node schedulist/utils/seed-data.js",
+    "db:seed:mjs": "node schedulist/utils/seed-data.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

@@ -61,7 +61,7 @@ router.get('/available-therapists', bcbaController.getAvailableTherapists);
 router.get('/available-bcbas', bcbaController.getAvailableBCBAs);
 
 // Get patients with assignments
-router.get('/patients-with-assignments', authenticate, bcbaController.getPatientsWithAssignments);
+router.get('/patients-with-assignments', bcbaController.getPatientsWithAssignments);
 
 // Set primary BCBA for a patient
 router.post(
@@ -93,7 +93,7 @@ router.post(
 //   bcbaController.getUnassignedPatients
 // );
 
-router.get('/unassigned-patients', authenticate, bcbaController.getUnassignedPatients);
+router.get('/unassigned-patients', bcbaController.getUnassignedPatients);
 
 // Update BCBA assignment
 router.post(

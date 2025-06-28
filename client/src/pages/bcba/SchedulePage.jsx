@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../context/auth-context';
+import { useLocation } from 'react-router-dom';
 import { format, addDays, subDays, startOfDay, isSameDay, parseISO, addMinutes } from 'date-fns';
 import { 
   Calendar, 
@@ -14,7 +15,9 @@ import {
   X,
   Info,
   Users,
-  Settings
+  Settings,
+  Coffee,
+  BarChart3
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -23,18 +26,26 @@ import {
   createAppointment, 
   createAppointmentNextSlot, 
   findNextAvailableSlot,
-  getTeamSchedule
+  getTeamSchedule,
+  updateAppointmentTherapist
 } from '../../api/schedule';
-import { getTherapists, getAvailableBCBAs } from '../../api/bcba';
+import { getTherapists, getAvailableBCBAs, getPatientsWithAssignments } from '../../api/bcba';
 import { getPatients } from '../../api/patients';
 import { getLocations } from '../../api/admin';
 import { calculateAppointmentStyle, formatTime, generateTimeSlots } from '../../utils/date-utils';
 import TeamScheduleView from '../../components/schedule/TeamScheduleView';
 import EnhancedScheduleView from '../../components/schedule/EnhancedScheduleView';
+import ContractFulfillmentView from '../../components/schedule/ContractFulfillmentView';
+import UnifiedScheduleView from '../../components/schedule/UnifiedScheduleView';
+import ExcelScheduleGrid from '../../components/schedule/ExcelScheduleGrid';
+import PatientScheduleGrid from '../../components/schedule/PatientScheduleGrid';
+import LunchScheduleManager from '../../components/schedule/LunchScheduleManager';
+import ContinuityTracker from '../../components/schedule/ContinuityTracker';
 
 export default function BCBASchedulePage() {
   // Import auth context to get user info
   const { user } = useAuth();
+  const location = useLocation();
   
   // Get user's default location
   const getUserDefaultLocation = () => {
@@ -48,7 +59,7 @@ export default function BCBASchedulePage() {
   };
   
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [viewType, setViewType] = useState('daily');
+  const [viewType, setViewType] = useState('grid');
   const [selectedTherapist, setSelectedTherapist] = useState(null);
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [selectedLocation, setSelectedLocation] = useState(null);
@@ -58,6 +69,7 @@ export default function BCBASchedulePage() {
   const [formError, setFormError] = useState(null);
   const [isCheckingAvailability, setIsCheckingAvailability] = useState(false);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+  const [isFormPreFilled, setIsFormPreFilled] = useState(false);
   
   // Form state for new appointment with default location
   const defaultLocation = getUserDefaultLocation();
@@ -89,9 +101,18 @@ export default function BCBASchedulePage() {
   // QueryClient for cache invalidation
   const queryClient = useQueryClient();
   
-  // Reset form when dialog is toggled
+  // Handle navigation state (patient selected from patients page)
   useEffect(() => {
-    if (showAppointmentForm) {
+    if (location.state?.selectedPatient && location.state?.filterByPatient) {
+      setSelectedPatient(location.state.selectedPatient);
+      // Set view type to patient to show the column-based patient schedule view
+      setViewType('patient');
+    }
+  }, [location.state]);
+  
+  // Reset form when dialog is toggled (only if not pre-filled)
+  useEffect(() => {
+    if (showAppointmentForm && !isFormPreFilled) {
       setFormState({
         patientId: '',
         therapistId: '',
@@ -118,7 +139,11 @@ export default function BCBASchedulePage() {
       });
       setFormError(null);
     }
-  }, [showAppointmentForm, user, defaultLocation]);
+    // Reset the pre-filled flag when dialog closes
+    if (!showAppointmentForm) {
+      setIsFormPreFilled(false);
+    }
+  }, [showAppointmentForm, user, defaultLocation, isFormPreFilled]);
   
   // Check next available slot
   const handleCheckNextAvailable = async () => {
@@ -152,20 +177,32 @@ export default function BCBASchedulePage() {
   // Create appointment mutation
   const createAppointmentMutation = useMutation({
     mutationFn: createAppointment,
-    onSuccess: () => {
-      // Invalidate and refetch the schedule data
+    onSuccess: (data) => {
+      console.log('Appointment created successfully:', data);
+      // Invalidate and refetch all schedule data
       queryClient.invalidateQueries(['bcbaSchedule']);
+      queryClient.invalidateQueries(['teamSchedule']);
+      queryClient.invalidateQueries(['patients-with-assignments']);
       setShowAppointmentForm(false);
+    },
+    onError: (error) => {
+      console.error('Failed to create appointment:', error);
     }
   });
   
   // Create appointment with next slot mutation
   const createAppointmentNextSlotMutation = useMutation({
     mutationFn: createAppointmentNextSlot,
-    onSuccess: () => {
-      // Invalidate and refetch the schedule data
+    onSuccess: (data) => {
+      console.log('Appointment created with next slot successfully:', data);
+      // Invalidate and refetch all schedule data
       queryClient.invalidateQueries(['bcbaSchedule']);
+      queryClient.invalidateQueries(['teamSchedule']);
+      queryClient.invalidateQueries(['patients-with-assignments']);
       setShowAppointmentForm(false);
+    },
+    onError: (error) => {
+      console.error('Failed to create appointment with next slot:', error);
     }
   });
   
@@ -187,8 +224,16 @@ export default function BCBASchedulePage() {
       return;
     }
     
-    if (!formState.locationId) {
-      setFormError('Please select a location');
+    // Ensure we have a location - required by backend
+    let finalLocationId = formState.locationId;
+    if (!finalLocationId && defaultLocation) {
+      finalLocationId = defaultLocation;
+    }
+    if (!finalLocationId && locations?.length > 0) {
+      finalLocationId = locations[0].id; // Use first available location
+    }
+    if (!finalLocationId) {
+      setFormError('No location available. Please contact administrator.');
       return;
     }
     
@@ -233,7 +278,7 @@ export default function BCBASchedulePage() {
           patientId: formState.patientId,
           therapistId: formState.therapistId,
           bcbaId: formState.bcbaId,
-          locationId: formState.locationId,
+          locationId: finalLocationId,
           durationMinutes: formState.durationMinutes,
           preferredDate: formState.preferredDate || undefined,
           title: formState.title || undefined,
@@ -252,7 +297,7 @@ export default function BCBASchedulePage() {
           patientId: formState.patientId,
           therapistId: formState.therapistId,
           bcbaId: formState.bcbaId,
-          locationId: formState.locationId,
+          locationId: finalLocationId,
           startTime: startDateTime.toISOString(),
           endTime: endDateTime.toISOString(),
           title: formState.title || undefined,
@@ -291,10 +336,10 @@ export default function BCBASchedulePage() {
     queryFn: () => getLocations(true), // Only active locations
   });
   
-  // Fetch patients data
+  // Fetch patients data - use BCBA-specific endpoint
   const { data: patients, isLoading: isLoadingPatients } = useQuery({
-    queryKey: ['patients'],
-    queryFn: () => getPatients('active'), // Only active patients
+    queryKey: ['bcba-patients'],
+    queryFn: getPatientsWithAssignments,
   });
   
   // Fetch schedule data
@@ -319,24 +364,47 @@ export default function BCBASchedulePage() {
   const { data: teamScheduleData, isLoading: isLoadingTeamSchedule, error: teamScheduleError } = useQuery({
     queryKey: ['teamSchedule', selectedDate.toISOString()],
     queryFn: () => getTeamSchedule(selectedDate.toISOString()),
-    enabled: viewType === 'team' || viewType === 'enhanced'
+    enabled: viewType === 'team' || viewType === 'enhanced' || viewType === 'grid' || viewType === 'patient' || viewType === 'unified' || viewType === 'lunch' || viewType === 'continuity',
+    onSuccess: (data) => {
+      console.log('Team schedule data fetched:', {
+        selectedDate: selectedDate.toISOString(),
+        appointmentCount: data?.appointments?.length || 0,
+        appointments: data?.appointments?.map(app => ({
+          id: app.id,
+          startTime: app.startTime,
+          endTime: app.endTime,
+          patientId: app.patientId,
+          therapistId: app.therapistId,
+          serviceType: app.serviceType
+        })) || []
+      });
+    },
+    onError: (error) => {
+      console.error('Error fetching team schedule:', error);
+    }
   });
   
   // Navigate to previous day/week
   const navigatePrevious = () => {
-    if (viewType === 'daily') {
-      setSelectedDate(subDays(selectedDate, 1));
-    } else if (viewType === 'weekly' || viewType === 'team' || viewType === 'enhanced') {
+    console.log('Navigate Previous - Current viewType:', viewType);
+    if (viewType === 'weekly') {
+      console.log('Moving back 7 days (week)');
       setSelectedDate(subDays(selectedDate, 7));
+    } else {
+      console.log('Moving back 1 day');
+      setSelectedDate(subDays(selectedDate, 1));
     }
   };
   
   // Navigate to next day/week
   const navigateNext = () => {
-    if (viewType === 'daily') {
-      setSelectedDate(addDays(selectedDate, 1));
-    } else if (viewType === 'weekly' || viewType === 'team' || viewType === 'enhanced') {
+    console.log('Navigate Next - Current viewType:', viewType);
+    if (viewType === 'weekly') {
+      console.log('Moving forward 7 days (week)');
       setSelectedDate(addDays(selectedDate, 7));
+    } else {
+      console.log('Moving forward 1 day');
+      setSelectedDate(addDays(selectedDate, 1));
     }
   };
   
@@ -345,16 +413,22 @@ export default function BCBASchedulePage() {
     setSelectedDate(new Date());
   };
   
-  // Toggle between daily, weekly, and team views
+  // Toggle between grid, patient, lunch, continuity, team, enhanced, and unified views
   const toggleViewType = () => {
-    if (viewType === 'daily') {
-      setViewType('weekly');
-    } else if (viewType === 'weekly') {
+    if (viewType === 'grid') {
+      setViewType('patient');
+    } else if (viewType === 'patient') {
+      setViewType('lunch');
+    } else if (viewType === 'lunch') {
+      setViewType('continuity');
+    } else if (viewType === 'continuity') {
       setViewType('team');
     } else if (viewType === 'team') {
       setViewType('enhanced');
+    } else if (viewType === 'enhanced') {
+      setViewType('unified');
     } else {
-      setViewType('daily');
+      setViewType('grid');
     }
   };
   
@@ -440,7 +514,102 @@ export default function BCBASchedulePage() {
   // Loading state
   const isLoading = isLoadingTherapists || isLoadingLocations || isLoadingPatients || isLoadingBCBAs ||
                   ((viewType === 'daily' || viewType === 'weekly') && isLoadingSchedule) || 
-                  ((viewType === 'team' || viewType === 'enhanced') && isLoadingTeamSchedule);
+                  ((viewType === 'team' || viewType === 'enhanced' || viewType === 'contract' || viewType === 'unified' || viewType === 'grid' || viewType === 'patient' || viewType === 'lunch' || viewType === 'continuity') && isLoadingTeamSchedule);
+  
+  // Format patient name for display
+  const formatPatientName = (patient) => {
+    if (!patient) return 'Unknown';
+    // If names are encrypted/null, use patient ID as fallback
+    if (!patient.firstName || patient.firstName === 'null' || patient.firstName.length < 2) {
+      return `Patient ${patient.id.substring(0, 8)}`;
+    }
+    const firstTwo = patient.firstName?.substring(0, 2) || '--';
+    const lastTwo = patient.lastName?.substring(0, 2) || '--';
+    return `${firstTwo}${lastTwo}`;
+  };
+
+  // Format full patient name for hover/tooltip
+  const formatFullPatientName = (patient) => {
+    if (!patient) return 'Unknown';
+    // If names are encrypted/null, use patient ID as fallback
+    if (!patient.firstName || patient.firstName === 'null') {
+      return `Patient ${patient.id.substring(0, 8)}`;
+    }
+    return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
+  };
+
+  // Parse time slot to start and end times (convert to HH:MM format for HTML time inputs)
+  const parseTimeSlot = (timeSlot) => {
+    const [startTime, endTime] = timeSlot.split('-');
+    
+    // Convert to 24-hour HH:MM format (e.g., "8:00" -> "08:00", "1:30" -> "13:30")
+    const formatTimeForInput = (timeStr) => {
+      const [hours, minutes] = timeStr.split(':');
+      const hour24 = parseInt(hours);
+      return `${hour24.toString().padStart(2, '0')}:${minutes}`;
+    };
+    
+    return { 
+      startTime: formatTimeForInput(startTime), 
+      endTime: formatTimeForInput(endTime) 
+    };
+  };
+
+  // Handle cell click to pre-fill appointment form
+  const handleCellClick = ({ therapistId, patientId, timeSlot, selectedDate, teamId, leadBcbaId }) => {
+    const { startTime, endTime } = parseTimeSlot(timeSlot);
+    const dateStr = format(new Date(selectedDate), 'yyyy-MM-dd');
+    
+    // Find the team context for intelligent pre-filling
+    let contextBcbaId = leadBcbaId; // Use passed leadBcbaId first
+    let teamLocationId = null;
+    
+    if (teamId && teamScheduleData?.teams) {
+      const team = teamScheduleData.teams.find(t => t.id === teamId);
+      if (team) {
+        contextBcbaId = contextBcbaId || team.LeadBCBA?.id;
+        // Could add team-specific location logic here if available
+      }
+    }
+    
+    // If no team context but we have a therapist, try to find their team
+    if (!contextBcbaId && therapistId && teamScheduleData?.teams) {
+      const therapistTeam = teamScheduleData.teams.find(team => 
+        team.Members?.some(member => member.id === therapistId)
+      );
+      if (therapistTeam) {
+        contextBcbaId = therapistTeam.LeadBCBA?.id;
+      }
+    }
+    
+    // Determine best BCBA: team lead > current user if BCBA > existing form value
+    const bestBcbaId = contextBcbaId || 
+                      (user?.roles?.includes('bcba') ? user.id : null) || 
+                      formState.bcbaId;
+    
+    // Determine best location: user default > team location > existing form value
+    const bestLocationId = defaultLocation || teamLocationId || formState.locationId;
+    
+    // Pre-fill form with clicked cell data and intelligent defaults
+    setFormState(prev => ({
+      ...prev,
+      date: dateStr,
+      startTime,
+      endTime,
+      therapistId: therapistId || prev.therapistId,
+      patientId: patientId || prev.patientId,
+      bcbaId: bestBcbaId,
+      locationId: bestLocationId,
+      // Reset other fields to defaults
+      useNextAvailableSlot: false,
+      title: '',
+      notes: ''
+    }));
+    
+    // Mark form as pre-filled to prevent reset
+    setIsFormPreFilled(true);
+    setShowAppointmentForm(true);
+  };
   
   return (
     <div className="h-full flex flex-col">
@@ -467,25 +636,40 @@ export default function BCBASchedulePage() {
           </Button>
           
           <Button variant="outline" size="sm" onClick={toggleViewType}>
-            {viewType === 'daily' ? (
+            {viewType === 'grid' ? (
               <>
-                <Calendar className="h-4 w-4 mr-2" />
-                <span>Weekly</span>
+                <User className="h-4 w-4 mr-2" />
+                <span>Patient View</span>
               </>
-            ) : viewType === 'weekly' ? (
+            ) : viewType === 'patient' ? (
+              <>
+                <Coffee className="h-4 w-4 mr-2" />
+                <span>Lunch Manager</span>
+              </>
+            ) : viewType === 'lunch' ? (
+              <>
+                <BarChart3 className="h-4 w-4 mr-2" />
+                <span>Continuity</span>
+              </>
+            ) : viewType === 'continuity' ? (
               <>
                 <Users className="h-4 w-4 mr-2" />
-                <span>Team</span>
+                <span>Team View</span>
               </>
             ) : viewType === 'team' ? (
               <>
                 <Settings className="h-4 w-4 mr-2" />
                 <span>Enhanced</span>
               </>
+            ) : viewType === 'enhanced' ? (
+              <>
+                <Calendar className="h-4 w-4 mr-2" />
+                <span>Unified</span>
+              </>
             ) : (
               <>
                 <Clock className="h-4 w-4 mr-2" />
-                <span>Daily</span>
+                <span>Grid View</span>
               </>
             )}
           </Button>
@@ -500,7 +684,7 @@ export default function BCBASchedulePage() {
       {/* Filters */}
       {showFilters && (
         <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm mb-4 border border-gray-200 dark:border-gray-700">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Therapist</label>
               <select 
@@ -527,27 +711,12 @@ export default function BCBASchedulePage() {
                 <option value="">All Patients</option>
                 {patients?.map(patient => (
                   <option key={patient.id} value={patient.id}>
-                    {patient.firstName} {patient.lastName}
+                    {formatPatientName(patient)}
                   </option>
                 ))}
               </select>
             </div>
             
-            <div>
-              <label className="block text-sm font-medium mb-1">Location</label>
-              <select 
-                className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                value={selectedLocation || ''}
-                onChange={(e) => setSelectedLocation(e.target.value || null)}
-              >
-                <option value="">All Locations</option>
-                {locations?.map(location => (
-                  <option key={location.id} value={location.id}>
-                    {location.name}
-                  </option>
-                ))}
-              </select>
-            </div>
           </div>
           
           <div className="mt-4 flex justify-end">
@@ -559,13 +728,18 @@ export default function BCBASchedulePage() {
       )}
       
       {/* Date display */}
-      <div className="mb-6 text-center">
-        <h2 className="text-xl font-semibold">
-          {viewType === 'daily' 
-            ? format(selectedDate, 'PPPP') 
-            : `Week of ${format(startOfDay(selectedDate), 'MMMM d, yyyy')}`}
-        </h2>
-      </div>
+      {viewType !== 'contract' && (
+        <div className="mb-6 text-center">
+          <h2 className="text-xl font-semibold">
+            {viewType === 'weekly'
+              ? `Week of ${format(selectedDate, 'MMMM d, yyyy')}`
+              : format(selectedDate, 'EEEE, MMMM d, yyyy')}
+          </h2>
+          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+            Current view: {viewType}
+          </p>
+        </div>
+      )}
       
       {/* Loading state */}
       {isLoading && (
@@ -581,6 +755,178 @@ export default function BCBASchedulePage() {
             <p className="text-red-500 mb-4">Failed to load schedule</p>
             <Button onClick={refetchSchedule}>Try Again</Button>
           </div>
+        </div>
+      )}
+      
+      {/* Excel Grid View - Team-based schedule like Excel format */}
+      {!isLoading && viewType === 'grid' && (
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingTeamSchedule ? (
+            <div className="flex justify-center items-center h-full">
+              <p>Loading team schedule...</p>
+            </div>
+          ) : teamScheduleError ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <p className="text-red-500 mb-4">Failed to load team schedule</p>
+              <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
+            </div>
+          ) : (
+            <ExcelScheduleGrid
+              teams={teamScheduleData?.teams || []}
+              appointments={teamScheduleData?.appointments || []}
+              patients={patients || []}
+              selectedDate={selectedDate}
+              onAppointmentClick={handleAppointmentClick}
+              onCellClick={({ therapistId, timeSlot, selectedDate }) => {
+                handleCellClick({ therapistId, timeSlot, selectedDate });
+              }}
+              userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
+              viewMode="team"
+            />
+          )}
+        </div>
+      )}
+      
+      {/* Patient-focused Grid View */}
+      {!isLoading && viewType === 'patient' && (
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingTeamSchedule ? (
+            <div className="flex justify-center items-center h-full">
+              <p>Loading patient schedules...</p>
+            </div>
+          ) : teamScheduleError ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <p className="text-red-500 mb-4">Failed to load patient schedules</p>
+              <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
+            </div>
+          ) : (
+            <PatientScheduleGrid
+              patients={patients || []}
+              appointments={teamScheduleData?.appointments || []}
+              therapists={therapists || []}
+              selectedDate={selectedDate}
+              onAppointmentClick={handleAppointmentClick}
+              onGapClick={({ patientId, timeSlot }) => {
+                console.log('Gap clicked:', { patientId, timeSlot });
+                // TODO: Open assignment modal for uncovered session
+              }}
+              onTherapistAssignment={async ({ appointmentId, therapistId, patientId, action }) => {
+                try {
+                  console.log('Updating therapist assignment:', { appointmentId, therapistId, patientId, action });
+                  await updateAppointmentTherapist(appointmentId, therapistId);
+                  queryClient.invalidateQueries(['teamSchedule']);
+                  queryClient.invalidateQueries(['bcbaSchedule']);
+                  queryClient.invalidateQueries(['patients-with-assignments']);
+                } catch (error) {
+                  console.error('Failed to update therapist assignment:', error);
+                }
+              }}
+              onCellClick={({ patientId, timeSlot, selectedDate }) => {
+                handleCellClick({ patientId, timeSlot, selectedDate });
+              }}
+              userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
+              showOnlyUncovered={false}
+              viewMode="columns"
+            />
+          )}
+        </div>
+      )}
+
+      {/* Lunch Schedule Manager */}
+      {!isLoading && viewType === 'lunch' && (
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingTeamSchedule ? (
+            <div className="flex justify-center items-center h-full">
+              <p>Loading lunch schedule data...</p>
+            </div>
+          ) : teamScheduleError ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <p className="text-red-500 mb-4">Failed to load lunch schedule data</p>
+              <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
+            </div>
+          ) : (
+            <LunchScheduleManager
+              teams={teamScheduleData?.teams || []}
+              therapists={therapists || []}
+              appointments={teamScheduleData?.appointments || []}
+              selectedDate={selectedDate}
+              onLunchScheduled={(lunchAppointment) => {
+                console.log('Individual lunch scheduled:', lunchAppointment);
+                // TODO: Implement individual lunch scheduling
+              }}
+              onBulkLunchSchedule={async (lunchAppointments) => {
+                try {
+                  for (const appointment of lunchAppointments) {
+                    await createAppointmentMutation.mutateAsync({
+                      ...appointment,
+                      locationId: appointment.locationId || user?.defaultLocationId || null
+                    });
+                  }
+                  queryClient.invalidateQueries(['teamSchedule']);
+                } catch (error) {
+                  console.error('Failed to create lunch appointments:', error);
+                  throw error;
+                }
+              }}
+              userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
+              currentUser={user}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Continuity Tracker */}
+      {!isLoading && viewType === 'continuity' && (
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingTeamSchedule ? (
+            <div className="flex justify-center items-center h-full">
+              <p>Loading continuity data...</p>
+            </div>
+          ) : teamScheduleError ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <p className="text-red-500 mb-4">Failed to load continuity data</p>
+              <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
+            </div>
+          ) : (
+            <ContinuityTracker
+              patients={patients || []}
+              appointments={teamScheduleData?.appointments || []}
+              therapists={therapists || []}
+              selectedDate={selectedDate}
+              userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
+              showOnlyIssues={false}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Unified View - Combined Patient Schedules with Therapist Coverage */}
+      {!isLoading && viewType === 'unified' && (
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingTeamSchedule ? (
+            <div className="flex justify-center items-center h-full">
+              <p>Loading unified schedule...</p>
+            </div>
+          ) : teamScheduleError ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <p className="text-red-500 mb-4">Failed to load unified schedule</p>
+              <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
+            </div>
+          ) : (
+            <UnifiedScheduleView
+              appointments={teamScheduleData?.appointments || []}
+              patients={patients || []}
+              therapists={therapists || []}
+              selectedDate={selectedDate}
+              onAppointmentUpdate={(updatedAppointment) => {
+                console.log('Appointment update requested:', updatedAppointment);
+                // Here you would add the actual mutation to update the appointment
+                alert('Appointment updated! This feature will save to the database soon.');
+              }}
+              onAppointmentClick={handleAppointmentClick}
+              userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
+            />
+          )}
         </div>
       )}
       
@@ -640,7 +986,12 @@ export default function BCBASchedulePage() {
                                 {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
                               </div>
                               <div className="font-medium truncate">
-                                {appointment.therapist?.name}: {appointment.patient?.firstName} {appointment.patient?.lastInitial}.
+                                <span 
+                                  title={formatFullPatientName(appointment.patient)}
+                                  className="cursor-help"
+                                >
+                                  {appointment.therapist?.name}: {formatPatientName(appointment.patient)}
+                                </span>
                               </div>
                               {appointment.bcba && (
                                 <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
@@ -730,7 +1081,12 @@ export default function BCBASchedulePage() {
                                 {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
                               </div>
                               <div className="font-medium truncate">
-                                {appointment.patient?.firstName} {appointment.patient?.lastInitial}. with {appointment.therapist?.name}
+                                <span 
+                                  title={formatFullPatientName(appointment.patient)}
+                                  className="cursor-help"
+                                >
+                                  {formatPatientName(appointment.patient)} with {appointment.therapist?.name}
+                                </span>
                               </div>
                               {appointment.bcba && (
                                 <div className="text-xs text-gray-600 dark:text-gray-400 truncate">
@@ -792,7 +1148,7 @@ export default function BCBASchedulePage() {
                         <div className="flex justify-between items-start">
                           <div>
                             <h4 className="font-medium">
-                              {appointment.patient?.firstName || 'Unknown'} {appointment.patient?.lastInitial || ''}{appointment.patient?.lastInitial ? '.' : ''}
+                              {appointment.patient?.firstName || 'Unknown'} {appointment.patient?.lastName ? appointment.patient.lastName.charAt(0) + '.' : ''}
                             </h4>
                             <p className="text-sm text-gray-600 dark:text-gray-400">
                               {appointment?.startTime ? format(parseISO(appointment.startTime), 'EEEE, MMMM d') : 'Unknown date'}
@@ -843,6 +1199,11 @@ export default function BCBASchedulePage() {
               appointments={teamScheduleData.appointments || []} 
               selectedDate={selectedDate}
               showLocationView={teamScheduleData.teams?.length === 0}
+              userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
+              onAppointmentClick={handleAppointmentClick}
+              onCellClick={({ therapistId, timeSlot, selectedDate, teamId, leadBcbaId }) => {
+                handleCellClick({ therapistId, timeSlot, selectedDate, teamId, leadBcbaId });
+              }}
             />
           ) : (
             <div className="p-8 text-center text-gray-500 dark:text-gray-400">
@@ -872,6 +1233,7 @@ export default function BCBASchedulePage() {
               selectedDate={selectedDate}
               onAppointmentClick={handleAppointmentClick}
               showLocationView={teamScheduleData.teams?.length === 0}
+              userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               onAppointmentUpdate={(updatedAppointment) => {
                 console.log('Appointment update requested:', updatedAppointment);
                 // Here you would add the actual mutation to update the appointment
@@ -884,6 +1246,27 @@ export default function BCBASchedulePage() {
               <Users className="h-12 w-12 mx-auto mb-4 opacity-30" />
               <p>No appointments found for this date range.</p>
             </div>
+          )}
+        </div>
+      )}
+      
+      {/* Contract Fulfillment View */}
+      {!isLoading && viewType === 'contract' && (
+        <div className="flex-1 overflow-y-auto">
+          {isLoadingTeamSchedule ? (
+            <div className="flex justify-center items-center h-full">
+              <p>Loading contract data...</p>
+            </div>
+          ) : teamScheduleError ? (
+            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+              <p className="text-red-500 mb-4">Failed to load contract data</p>
+              <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
+            </div>
+          ) : (
+            <ContractFulfillmentView 
+              patients={patients || []}
+              appointments={teamScheduleData?.appointments || []}
+            />
           )}
         </div>
       )}
@@ -903,8 +1286,7 @@ export default function BCBASchedulePage() {
               <div>
                 <h3 className="font-medium text-gray-700 dark:text-gray-300">Patient</h3>
                 <p className="text-lg">
-                  {selectedAppointment?.patient?.firstName || 'Unknown'} 
-                  {selectedAppointment?.patient?.lastInitial ? `${selectedAppointment.patient.lastInitial}.` : ''}
+                  {formatFullPatientName(selectedAppointment?.patient)}
                 </p>
               </div>
               
@@ -978,7 +1360,25 @@ export default function BCBASchedulePage() {
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-6">
             <div className="flex justify-between items-start mb-4">
-              <h2 className="text-xl font-bold">New Appointment</h2>
+              <div>
+                <h2 className="text-xl font-bold">New Appointment</h2>
+                {(formState.therapistId || formState.patientId) && formState.date && formState.startTime && (
+                  <p className="text-sm text-blue-600 dark:text-blue-400 mt-1">
+                    <Clock className="h-3 w-3 inline mr-1" />
+                    Pre-filled from schedule grid
+                    {formState.therapistId && (
+                      <span className="ml-2 text-xs bg-blue-100 dark:bg-blue-900/30 px-2 py-1 rounded">
+                        Therapist selected
+                      </span>
+                    )}
+                    {formState.bcbaId && (
+                      <span className="ml-2 text-xs bg-green-100 dark:bg-green-900/30 px-2 py-1 rounded">
+                        BCBA assigned
+                      </span>
+                    )}
+                  </p>
+                )}
+              </div>
               <Button variant="ghost" size="sm" onClick={toggleAppointmentForm}>
                 <X className="h-4 w-4" />
               </Button>
@@ -998,7 +1398,7 @@ export default function BCBASchedulePage() {
                     <option value="">Select a patient</option>
                     {patients?.map(patient => (
                       <option key={patient.id} value={patient.id}>
-                        {patient.firstName} {patient.lastName}
+                        {formatPatientName(patient)}
                       </option>
                     ))}
                   </select>
@@ -1044,23 +1444,24 @@ export default function BCBASchedulePage() {
                   </select>
                 </div>
                 
-                {/* Location Selection */}
-                <div>
-                  <label className="block text-sm font-medium mb-1">Location *</label>
-                  <select 
-                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                    value={formState.locationId || ''}
-                    onChange={(e) => setFormState({...formState, locationId: e.target.value})}
-                    required
-                  >
-                    <option value="">Select a location</option>
-                    {locations?.map(location => (
-                      <option key={location.id} value={location.id}>
-                        {location.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {/* Location Selection - Optional for therapist scheduling */}
+                {user?.roles?.includes('admin') && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Location</label>
+                    <select 
+                      className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                      value={formState.locationId || ''}
+                      onChange={(e) => setFormState({...formState, locationId: e.target.value})}
+                    >
+                      <option value="">Select a location</option>
+                      {locations?.map(location => (
+                        <option key={location.id} value={location.id}>
+                          {location.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
               
               {/* Scheduling Options */}
@@ -1145,8 +1546,8 @@ export default function BCBASchedulePage() {
                         <label className="block text-sm font-medium mb-1">Start Time *</label>
                         <input
                           type="time"
-                          className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                          value={formState.startTime || '08:00'}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                          value={formState.startTime || ''}
                           onChange={(e) => setFormState({...formState, startTime: e.target.value})}
                           required
                         />
@@ -1156,8 +1557,8 @@ export default function BCBASchedulePage() {
                         <label className="block text-sm font-medium mb-1">End Time *</label>
                         <input
                           type="time"
-                          className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                          value={formState.endTime || '08:30'}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                          value={formState.endTime || ''}
                           onChange={(e) => setFormState({...formState, endTime: e.target.value})}
                           required
                         />

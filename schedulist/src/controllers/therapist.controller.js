@@ -77,11 +77,12 @@ const getUpcomingSchedule = async (req, res) => {
       include: [
         {
           model: Patient,
-          attributes: ['id', 'status']
+          required: true
         },
         {
           model: Location,
-          attributes: ['id', 'name', 'address']
+          attributes: ['id', 'name', 'address'],
+          required: false
         }
       ],
       order: [['startTime', 'ASC']]
@@ -94,12 +95,12 @@ const getUpcomingSchedule = async (req, res) => {
       startTime: appt.startTime,
       endTime: appt.endTime,
       status: appt.status,
-      patient: {
+      patient: appt.Patient ? {
         id: appt.Patient.id,
         firstName: appt.Patient.firstName,
-        lastInitial: appt.Patient.lastName ? appt.Patient.lastName.charAt(0) : '',
+        lastName: appt.Patient.lastName,
         status: appt.Patient.status
-      },
+      } : null,
       location: appt.Location ? {
         id: appt.Location.id,
         name: appt.Location.name,

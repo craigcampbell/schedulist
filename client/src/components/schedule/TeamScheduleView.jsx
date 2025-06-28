@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { format, parseISO, isSameDay } from 'date-fns';
 import { cn } from '../../lib/utils';
-import { Clock, MapPin, User, Calendar } from 'lucide-react';
+import { Clock, MapPin, User, Calendar, Plus } from 'lucide-react';
 import { Button } from '../ui/button';
 
 const SERVICE_TYPE_COLORS = {
@@ -56,7 +56,10 @@ export default function TeamScheduleView({
   teams, 
   appointments = [], 
   selectedDate,
-  showLocationView = false 
+  showLocationView = false,
+  userRole = null, // Add userRole prop to determine name display format
+  onAppointmentClick = () => {},
+  onCellClick = () => {}
 }) {
   const [expandedTeams, setExpandedTeams] = useState({});
   const [selectedAppointment, setSelectedAppointment] = useState(null);
@@ -76,6 +79,22 @@ export default function TeamScheduleView({
     } catch (error) {
       return 'Invalid time';
     }
+  };
+
+  // Format patient name based on user role
+  const formatPatientName = (patient) => {
+    if (!patient) return 'Unknown';
+    
+    // For all roles in schedule view, show abbreviated names (first 2 + last 2 chars)
+    const firstTwo = patient.firstName?.substring(0, 2) || '--';
+    const lastTwo = patient.lastName?.substring(0, 2) || '--';
+    return `${firstTwo}${lastTwo}`;
+  };
+
+  // Format full patient name for hover/tooltip
+  const formatFullPatientName = (patient) => {
+    if (!patient) return 'Unknown';
+    return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
   };
 
   // Group appointments by therapist
@@ -175,6 +194,7 @@ export default function TeamScheduleView({
   // Handle appointment click
   const handleAppointmentClick = (appointment) => {
     setSelectedAppointment(appointment);
+    onAppointmentClick(appointment);
   };
 
   const closeAppointmentDetails = () => {
@@ -219,7 +239,12 @@ export default function TeamScheduleView({
                         <div className="flex justify-between items-start">
                           <div>
                             <div className="font-medium">
-                              {app.patient?.firstName || 'Unknown'} {app.patient?.lastName ? app.patient.lastName.charAt(0) + '.' : ''}
+                              <span 
+                                title={formatFullPatientName(app.patient)}
+                                className="cursor-help"
+                              >
+                                {formatPatientName(app.patient)}
+                              </span>
                             </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
                               {formatTime(app.startTime)} - {formatTime(app.endTime)}
@@ -339,17 +364,39 @@ export default function TeamScheduleView({
                           <div 
                             key={member.id}
                             className={cn(
-                              "p-2 border-r dark:border-gray-700 min-h-[2.5rem] text-center text-sm",
-                              appointmentForDisplay && "cursor-pointer hover:opacity-80",
+                              "p-2 border-r dark:border-gray-700 min-h-[2.5rem] text-center text-sm cursor-pointer transition-colors group",
+                              appointmentForDisplay && "hover:opacity-80",
+                              !appointmentForDisplay && "hover:bg-blue-50 dark:hover:bg-blue-900/20",
                               serviceType && SERVICE_TYPE_COLORS[serviceType]
                             )}
-                            onClick={appointmentForDisplay ? () => handleAppointmentClick(appointmentForDisplay) : undefined}
-                            title={appointmentForDisplay ? `${appointmentForDisplay.patient?.firstName || 'Patient'} - ${formatTime(appointmentForDisplay.startTime)} to ${formatTime(appointmentForDisplay.endTime)}` : ''}
+                            onClick={appointmentForDisplay ? 
+                              () => onAppointmentClick(appointmentForDisplay) : 
+                              () => onCellClick({ 
+                                therapistId: member.id, 
+                                timeSlot, 
+                                selectedDate, 
+                                teamId: team.id,
+                                leadBcbaId: team.LeadBCBA?.id 
+                              })
+                            }
+                            title={appointmentForDisplay ? 
+                              `${formatPatientName(appointmentForDisplay.patient)} - ${formatTime(appointmentForDisplay.startTime)} to ${formatTime(appointmentForDisplay.endTime)}` : 
+                              'Click to add appointment'
+                            }
                           >
-                            {appointmentsInSlot.length > 0 && (
+                            {appointmentsInSlot.length > 0 ? (
                               <div className="font-medium">
-                                {appointmentForDisplay.patient?.firstName || appointmentForDisplay.serviceType || serviceType}
+                                <span 
+                                  title={formatFullPatientName(appointmentForDisplay.patient)}
+                                  className="cursor-help"
+                                >
+                                  {formatPatientName(appointmentForDisplay.patient)}
+                                </span>
                                 {appointmentsInSlot.length > 1 && ` +${appointmentsInSlot.length - 1}`}
+                              </div>
+                            ) : (
+                              <div className="flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                <Plus className="h-3 w-3 text-gray-400" />
                               </div>
                             )}
                           </div>
@@ -377,7 +424,12 @@ export default function TeamScheduleView({
                           <div className="flex justify-between items-start">
                             <div>
                               <div className="font-medium">
-                                {app.patient?.firstName} {app.patient?.lastName ? app.patient?.lastName.charAt(0) + '.' : ''}
+                                <span 
+                                  title={formatFullPatientName(app.patient)}
+                                  className="cursor-help"
+                                >
+                                  {formatPatientName(app.patient)}
+                                </span>
                               </div>
                               <div className="text-sm text-gray-500 dark:text-gray-400">
                                 with {member.firstName} {member.lastName}
@@ -423,7 +475,12 @@ export default function TeamScheduleView({
                             <div className="flex justify-between items-start">
                               <div>
                                 <div className="font-medium">
-                                  {app.patient?.firstName} {app.patient?.lastName ? app.patient?.lastName.charAt(0) + '.' : ''}
+                                  <span 
+                                    title={formatFullPatientName(app.patient)}
+                                    className="cursor-help"
+                                  >
+                                    {formatPatientName(app.patient)}
+                                  </span>
                                 </div>
                                 <div className="text-sm text-gray-500 dark:text-gray-400">
                                   with {member.firstName} {member.lastName}
@@ -488,10 +545,7 @@ export default function TeamScheduleView({
               <div>
                 <h3 className="font-medium text-gray-700 dark:text-gray-300">Patient</h3>
                 <p className="text-lg">
-                  {selectedAppointment.patient?.firstName || 'Unknown'} 
-                  {selectedAppointment.patient?.lastName 
-                    ? ` ${selectedAppointment.patient.lastName.charAt(0)}.` 
-                    : ''}
+                  {formatFullPatientName(selectedAppointment.patient)}
                 </p>
               </div>
               

@@ -543,37 +543,10 @@ const getPatientsWithAssignments = async (req, res) => {
     if (isAdmin) {
       whereClause = { organizationId: req.user.organizationId };
     } 
-    // BCBAs can only see their assigned patients
+    // BCBAs can see all patients in their organization (temporary fix for development)
+    // TODO: In production, this should be restricted to assigned patients only
     else if (isBcba) {
-      try {
-        const assignedPatients = await Patient.findAll({
-          include: [
-            {
-              model: User,
-              as: 'Assignees',
-              where: { id: userId },
-              attributes: [],
-              through: { attributes: [] }
-            }
-          ],
-          attributes: ['id']
-        });
-        
-        const patientIds = assignedPatients.map(p => p.id);
-        
-        if (patientIds.length === 0) {
-          console.log(`BCBA ${userId} has no assigned patients`);
-          return res.status(200).json([]);
-        }
-        
-        whereClause = { id: { [Op.in]: patientIds } };
-      } catch (error) {
-        console.error('Error finding assigned patients:', error);
-        return res.status(500).json({ 
-          message: 'Error finding assigned patients', 
-          error: error.message 
-        });
-      }
+      whereClause = { organizationId: req.user.organizationId };
     }
     
     console.log('Fetching patients with whereClause:', whereClause);
@@ -600,11 +573,22 @@ const getPatientsWithAssignments = async (req, res) => {
             attributes: ['id', 'firstName', 'lastName'],
             required: false
           }
-        ],
-        order: [['lastName', 'ASC'], ['firstName', 'ASC']]
+        ]
+        // Note: Cannot order by virtual fields (firstName, lastName) in SQL query
+        // Will sort in JavaScript after decryption
       });
       
       console.log(`Found ${patients.length} patients`);
+      
+      // Debug first patient
+      if (patients.length > 0) {
+        console.log('First patient raw data:', {
+          id: patients[0].id,
+          encryptedFirstName: patients[0].encryptedFirstName?.substring(0, 20) + '...',
+          firstName: patients[0].firstName,
+          lastName: patients[0].lastName
+        });
+      }
       
       // Format response to group assignees by role
       const formattedPatients = patients.map(patient => {
@@ -635,11 +619,15 @@ const getPatientsWithAssignments = async (req, res) => {
               if (role.name === 'bcba') {
                 patientData.bcbas.push({
                   id: assignee.id,
+                  firstName: assignee.firstName || '',
+                  lastName: assignee.lastName || '',
                   name: `${assignee.firstName || ''} ${assignee.lastName || ''}`.trim()
                 });
               } else if (role.name === 'therapist') {
                 patientData.therapists.push({
                   id: assignee.id,
+                  firstName: assignee.firstName || '',
+                  lastName: assignee.lastName || '',
                   name: `${assignee.firstName || ''} ${assignee.lastName || ''}`.trim()
                 });
               }
@@ -648,6 +636,13 @@ const getPatientsWithAssignments = async (req, res) => {
         }
         
         return patientData;
+      });
+      
+      // Sort patients by lastName, then firstName (after decryption)
+      formattedPatients.sort((a, b) => {
+        const lastNameCompare = (a.lastName || '').localeCompare(b.lastName || '');
+        if (lastNameCompare !== 0) return lastNameCompare;
+        return (a.firstName || '').localeCompare(b.firstName || '');
       });
       
       return res.status(200).json(formattedPatients);

@@ -72,6 +72,17 @@ router.put(
   scheduleController.updateAppointment
 );
 
+// Update appointment therapist assignment
+router.put(
+  '/:id/therapist',
+  isBCBA,
+  [
+    check('therapistId', 'Therapist ID must be a valid ID or null').optional().isUUID()
+  ],
+  validate,
+  scheduleController.updateAppointmentTherapist
+);
+
 // Delete an appointment
 router.delete(
   '/:id',
@@ -81,5 +92,57 @@ router.delete(
 
 // Get team-based schedule
 router.get('/teams', scheduleController.getTeamSchedule);
+
+// Debug endpoint to check organization data
+router.get('/debug-org', async (req, res) => {
+  try {
+    const { Appointment, User, Patient, Location } = require('../models');
+    
+    const userOrgId = req.user.organizationId;
+    
+    // Check users in this organization
+    const orgUsers = await User.findAll({
+      where: { organizationId: userOrgId },
+      attributes: ['id', 'firstName', 'lastName', 'email']
+    });
+    
+    // Check patients in this organization
+    const orgPatients = await Patient.findAll({
+      where: { organizationId: userOrgId },
+      attributes: ['id', 'firstName', 'lastName']
+    });
+    
+    // Check locations in this organization
+    const orgLocations = await Location.findAll({
+      where: { organizationId: userOrgId },
+      attributes: ['id', 'name']
+    });
+    
+    // Check all appointments with these users
+    const userIds = orgUsers.map(u => u.id);
+    const appointmentsWithOrgUsers = await Appointment.findAll({
+      where: {
+        [require('sequelize').Op.or]: [
+          { therapistId: { [require('sequelize').Op.in]: userIds } },
+          { bcbaId: { [require('sequelize').Op.in]: userIds } }
+        ]
+      },
+      attributes: ['id', 'startTime', 'therapistId', 'bcbaId', 'patientId'],
+      limit: 10
+    });
+    
+    res.json({
+      organizationId: userOrgId,
+      orgUsers: orgUsers.length,
+      orgPatients: orgPatients.length,
+      orgLocations: orgLocations.length,
+      appointmentsWithOrgUsers: appointmentsWithOrgUsers.length,
+      sampleUsers: orgUsers.slice(0, 3),
+      sampleAppointments: appointmentsWithOrgUsers.slice(0, 3)
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message, stack: error.stack });
+  }
+});
 
 module.exports = router;

@@ -1,7 +1,10 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../../context/auth-context';
 import { 
   getPatientsWithAssignments, 
+  getAllPatients,
   getAvailableTherapists, 
   getAvailableBCBAs,
   updateTherapistAssignment,
@@ -11,32 +14,39 @@ import {
 
 const PatientsPage = () => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPatient, setSelectedPatient] = useState(null);
   
   // Fetch patients with their assignments
-  const { data: patients = [], isLoading: patientsLoading } = useQuery({
+  const { data: patients = [], isLoading: patientsLoading, error: patientsError } = useQuery({
     queryKey: ['patients-with-assignments'],
     queryFn: getPatientsWithAssignments
   });
   
   // Fetch available therapists for assignment
-  const { data: availableTherapists = [] } = useQuery({
+  const { data: availableTherapists = [], isLoading: therapistsLoading, error: therapistsError } = useQuery({
     queryKey: ['available-therapists'],
     queryFn: getAvailableTherapists
   });
   
   // Fetch available BCBAs for assignment
-  const { data: availableBCBAs = [] } = useQuery({
+  const { data: availableBCBAs = [], isLoading: bcbasLoading, error: bcbasError } = useQuery({
     queryKey: ['available-bcbas'],
     queryFn: getAvailableBCBAs
   });
+
   
   // Mutations
   const assignTherapistMutation = useMutation({
     mutationFn: (data) => updateTherapistAssignment(data.patientId, data.therapistId, 'assign'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['patients-with-assignments'] });
+    },
+    onError: (error) => {
+      console.error('Error assigning therapist:', error);
     }
   });
   
@@ -44,6 +54,9 @@ const PatientsPage = () => {
     mutationFn: (data) => updateTherapistAssignment(data.patientId, data.therapistId, 'unassign'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['patients-with-assignments'] });
+    },
+    onError: (error) => {
+      console.error('Error unassigning therapist:', error);
     }
   });
   
@@ -51,6 +64,9 @@ const PatientsPage = () => {
     mutationFn: (data) => updateBCBAAssignment(data.patientId, data.bcbaId, 'assign'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['patients-with-assignments'] });
+    },
+    onError: (error) => {
+      console.error('Error assigning BCBA:', error);
     }
   });
   
@@ -58,6 +74,9 @@ const PatientsPage = () => {
     mutationFn: (data) => updateBCBAAssignment(data.patientId, data.bcbaId, 'unassign'),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['patients-with-assignments'] });
+    },
+    onError: (error) => {
+      console.error('Error unassigning BCBA:', error);
     }
   });
   
@@ -65,14 +84,18 @@ const PatientsPage = () => {
     mutationFn: (data) => setPrimaryBCBA(data.patientId, data.bcbaId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['patients-with-assignments'] });
+    },
+    onError: (error) => {
+      console.error('Error setting primary BCBA:', error);
     }
   });
   
   // Filter patients based on search term
-  const filteredPatients = patients.filter(patient => 
-    patient.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    patient.id.toString().includes(searchTerm)
-  );
+  const filteredPatients = patients.filter(patient => {
+    const patientName = `${patient.firstName} ${patient.lastName}`.toLowerCase();
+    return patientName.includes(searchTerm.toLowerCase()) ||
+      patient.id.toString().includes(searchTerm);
+  });
   
   const handleAssignTherapist = (patientId, therapistId) => {
     assignTherapistMutation.mutate({ patientId, therapistId });
@@ -93,12 +116,46 @@ const PatientsPage = () => {
   const handleSetPrimaryBCBA = (patientId, bcbaId) => {
     setPrimaryBCBAMutation.mutate({ patientId, bcbaId });
   };
+
+  const handlePatientClick = (patient) => {
+    // Determine the correct schedule path based on user role and current location
+    const isAdminPath = location.pathname.startsWith('/admin');
+    const schedulePath = isAdminPath ? '/admin/schedule' : '/bcba/schedule';
+    
+    // Navigate to schedule page with patient filter
+    navigate(schedulePath, { 
+      state: { 
+        selectedPatient: patient,
+        filterByPatient: true 
+      } 
+    });
+  };
   
   if (patientsLoading) return <div className="p-6">Loading patients...</div>;
+  
+  if (patientsError) {
+    return <div className="p-6 text-red-600">Error loading patients: {patientsError.message}</div>;
+  }
   
   return (
     <div className="container mx-auto p-6">
       <h1 className="text-2xl font-bold mb-6">Patients & Assignments</h1>
+      
+      {/* Debug info */}
+      {(therapistsError || bcbasError) && (
+        <div className="mb-4 p-4 bg-yellow-100 text-yellow-800 rounded">
+          {therapistsError && <p>Therapists loading error: {therapistsError.message}</p>}
+          {bcbasError && <p>BCBAs loading error: {bcbasError.message}</p>}
+        </div>
+      )}
+      
+      {/* Loading states */}
+      {(therapistsLoading || bcbasLoading) && selectedPatient && (
+        <div className="mb-4 p-4 bg-blue-100 text-blue-800 rounded">
+          {therapistsLoading && <p>Loading available therapists...</p>}
+          {bcbasLoading && <p>Loading available BCBAs...</p>}
+        </div>
+      )}
       
       {/* Search and filter */}
       <div className="mb-6">
@@ -121,15 +178,14 @@ const PatientsPage = () => {
           {filteredPatients.map(patient => (
             <div 
               key={patient.id}
-              className={`bg-white p-4 rounded-lg shadow cursor-pointer hover:shadow-md transition-shadow ${
+              className={`bg-white p-4 rounded-lg shadow hover:shadow-md transition-shadow ${
                 selectedPatient?.id === patient.id ? 'ring-2 ring-blue-500' : ''
               }`}
-              onClick={() => setSelectedPatient(patient)}
             >
-              <h3 className="text-lg font-medium">{patient.name}</h3>
+              <h3 className="text-lg font-medium">{patient.firstName} {patient.lastName}</h3>
               <p className="text-sm text-gray-500">ID: {patient.id}</p>
               <p className="text-sm text-gray-500">
-                Primary BCBA: {patient.primaryBcba ? patient.primaryBcba.name : 'None'}
+                Primary BCBA: {patient.primaryBCBA ? patient.primaryBCBA.name : 'None'}
               </p>
               <div className="mt-2">
                 <p className="text-xs font-medium text-gray-600">Assigned Therapists</p>
@@ -137,7 +193,7 @@ const PatientsPage = () => {
                   <div className="flex flex-wrap gap-1 mt-1">
                     {patient.therapists.map(therapist => (
                       <span key={therapist.id} className="text-xs bg-gray-100 px-2 py-1 rounded">
-                        {therapist.name}
+                        {therapist.firstName} {therapist.lastName}
                       </span>
                     ))}
                   </div>
@@ -151,13 +207,32 @@ const PatientsPage = () => {
                   <div className="flex flex-wrap gap-1 mt-1">
                     {patient.bcbas.map(bcba => (
                       <span key={bcba.id} className="text-xs bg-gray-100 px-2 py-1 rounded">
-                        {bcba.name}
+                        {bcba.firstName} {bcba.lastName}
                       </span>
                     ))}
                   </div>
                 ) : (
                   <p className="text-xs text-gray-400">No BCBAs assigned</p>
                 )}
+              </div>
+              
+              {/* Action buttons */}
+              <div className="mt-4 flex gap-2">
+                <button
+                  onClick={() => handlePatientClick(patient)}
+                  className="flex-1 bg-blue-500 text-white px-3 py-2 rounded text-sm hover:bg-blue-600 transition-colors"
+                >
+                  View Schedule
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedPatient(patient);
+                  }}
+                  className="flex-1 bg-gray-500 text-white px-3 py-2 rounded text-sm hover:bg-gray-600 transition-colors"
+                >
+                  Manage Assignments
+                </button>
               </div>
             </div>
           ))}
@@ -167,7 +242,15 @@ const PatientsPage = () => {
       {/* Patient details and assignment panel */}
       {selectedPatient && (
         <div className="mt-8 bg-white p-6 rounded-lg shadow">
-          <h2 className="text-xl font-bold mb-4">{selectedPatient.name} - Assignments</h2>
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold">{selectedPatient.firstName} {selectedPatient.lastName} - Assignments</h2>
+            <button
+              onClick={() => setSelectedPatient(null)}
+              className="text-gray-500 hover:text-gray-700 text-xl font-bold"
+            >
+              ×
+            </button>
+          </div>
           
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Therapists assignment section */}
@@ -181,7 +264,7 @@ const PatientsPage = () => {
                   <div className="space-y-2">
                     {selectedPatient.therapists.map(therapist => (
                       <div key={therapist.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                        <span>{therapist.name}</span>
+                        <span>{therapist.firstName} {therapist.lastName}</span>
                         <button
                           className="text-red-500 text-sm hover:underline"
                           onClick={() => handleUnassignTherapist(selectedPatient.id, therapist.id)}
@@ -207,7 +290,7 @@ const PatientsPage = () => {
                       )
                       .map(therapist => (
                         <div key={therapist.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                          <span>{therapist.name}</span>
+                          <span>{therapist.firstName} {therapist.lastName}</span>
                           <button
                             className="text-green-500 text-sm hover:underline"
                             onClick={() => handleAssignTherapist(selectedPatient.id, therapist.id)}
@@ -235,13 +318,13 @@ const PatientsPage = () => {
                     {selectedPatient.bcbas.map(bcba => (
                       <div key={bcba.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
                         <div className="flex items-center">
-                          <span>{bcba.name}</span>
-                          {selectedPatient.primaryBcbaId === bcba.id && (
+                          <span>{bcba.firstName} {bcba.lastName}</span>
+                          {selectedPatient.primaryBCBA?.id === bcba.id && (
                             <span className="ml-2 bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded">Primary</span>
                           )}
                         </div>
                         <div className="flex space-x-3">
-                          {selectedPatient.primaryBcbaId !== bcba.id && (
+                          {selectedPatient.primaryBCBA?.id !== bcba.id && (
                             <button
                               className="text-blue-500 text-sm hover:underline"
                               onClick={() => handleSetPrimaryBCBA(selectedPatient.id, bcba.id)}
@@ -275,7 +358,7 @@ const PatientsPage = () => {
                       )
                       .map(bcba => (
                         <div key={bcba.id} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                          <span>{bcba.name}</span>
+                          <span>{bcba.firstName} {bcba.lastName}</span>
                           <button
                             className="text-green-500 text-sm hover:underline"
                             onClick={() => handleAssignBCBA(selectedPatient.id, bcba.id)}

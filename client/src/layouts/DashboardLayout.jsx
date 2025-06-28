@@ -127,6 +127,34 @@ export default function DashboardLayout() {
                 Locations
               </NavLink>
               <NavLink 
+                to="/admin/patients" 
+                className={({ isActive }) => 
+                  `flex items-center px-2 py-2 text-sm font-medium rounded-md ${
+                    isActive 
+                      ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-white'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'
+                  }`
+                }
+                onClick={closeSidebar}
+              >
+                <Users className="mr-3 h-5 w-5" />
+                Patients
+              </NavLink>
+              <NavLink 
+                to="/admin/schedule" 
+                className={({ isActive }) => 
+                  `flex items-center px-2 py-2 text-sm font-medium rounded-md ${
+                    isActive 
+                      ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-white'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'
+                  }`
+                }
+                onClick={closeSidebar}
+              >
+                <Calendar className="mr-3 h-5 w-5" />
+                Schedule
+              </NavLink>
+              <NavLink 
                 to="/admin/subscription" 
                 className={({ isActive }) => 
                   `flex items-center px-2 py-2 text-sm font-medium rounded-md ${
