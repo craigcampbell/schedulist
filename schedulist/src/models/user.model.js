@@ -59,6 +59,22 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       defaultValue: false,
     },
+    inviteToken: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    inviteExpires: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    defaultLocationId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'Locations',
+        key: 'id'
+      }
+    },
   }, {
     timestamps: true,
     hooks: {

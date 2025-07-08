@@ -92,7 +92,8 @@ export default function TherapistPatientsPage() {
               to={`/therapist/patients/${patient.id}`}
               className="block"
             >
-              <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-md transition-shadow">
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border-2 hover:shadow-md transition-shadow"
+                style={{ borderColor: patient.color || '#6B7280' }}>
                 <div className="flex justify-between items-start">
                   <div>
                     <h3 className="font-semibold text-lg">
@@ -105,13 +106,20 @@ export default function TherapistPatientsPage() {
                       Insurance: {patient.insuranceProvider}
                     </p>
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                    patient.status === 'active'
-                      ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-                      : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
-                  }`}>
-                    {patient.status.charAt(0).toUpperCase() + patient.status.slice(1)}
-                  </span>
+                  <div className="flex items-start gap-2">
+                    <div 
+                      className="w-5 h-5 rounded-full border border-gray-300"
+                      style={{ backgroundColor: patient.color || '#6B7280' }}
+                      title="Patient color"
+                    />
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      patient.status === 'active'
+                        ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
+                        : 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300'
+                    }`}>
+                      {patient.status.charAt(0).toUpperCase() + patient.status.slice(1)}
+                    </span>
+                  </div>
                 </div>
                 
                 {patient.requiredWeeklyHours && (

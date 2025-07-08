@@ -1,6 +1,7 @@
 const express = require('express');
 const { check, validationResult } = require('express-validator');
 const bcbaController = require('../controllers/bcba.controller');
+const teamController = require('../controllers/team.controller');
 // import { authenticate, hasRole } from '../middleware/auth.middleware';
 const { authenticate, hasRole } = require('../middleware/auth.middleware');
 const { verifyToken, isBCBA } = require('../middleware/auth.middleware');
@@ -106,5 +107,27 @@ router.post(
   validate,
   bcbaController.updateBCBAAssignment
 );
+
+// Team management routes
+router.get('/teams', teamController.getTeams);
+router.post(
+  '/teams',
+  [
+    check('name', 'Team name is required').not().isEmpty(),
+  ],
+  validate,
+  teamController.createTeam
+);
+router.put('/teams/:id', teamController.updateTeam);
+router.post(
+  '/teams/:id/members',
+  [
+    check('userId', 'User ID is required').not().isEmpty(),
+  ],
+  validate,
+  teamController.addTeamMember
+);
+router.delete('/teams/:id/members/:memberId', teamController.removeTeamMember);
+router.delete('/teams/:id', teamController.deleteTeam);
 
 module.exports = router;

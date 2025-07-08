@@ -20,6 +20,9 @@ router.use(verifyToken);
 // Get all patients (therapists see their assigned patients, admins/BCBAs see all)
 router.get('/', isTherapist, patientController.getAllPatients);
 
+// Check for duplicate color
+router.get('/check-color', isTherapist, patientController.checkDuplicateColor);
+
 // Get patient by ID (therapists need specific access to patient)
 router.get('/:id', isTherapist, hasPatientAccess, patientController.getPatientById);
 

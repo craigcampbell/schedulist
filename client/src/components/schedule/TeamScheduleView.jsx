@@ -12,6 +12,7 @@ const SERVICE_TYPE_COLORS = {
   lunch: 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-200',
   circle: 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200',
   cleaning: 'bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-200',
+  parentTraining: 'bg-teal-100 dark:bg-teal-900/20 text-teal-800 dark:text-teal-200',
   jojo: 'bg-green-200 dark:bg-green-900/30 text-green-800 dark:text-green-200',
   zeki: 'bg-amber-200 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200',
   jonDu: 'bg-blue-200 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200',
@@ -23,33 +24,33 @@ const SERVICE_TYPE_COLORS = {
 };
 
 const TIME_SLOTS = [
-  "7:30-8:00", "8:00-8:30", "8:30-9:00", "9:00-9:30", "9:30-10:00", 
-  "10:00-10:30", "10:30-11:00", "11:00-11:30", "11:30-12:00", "12:00-12:30", 
-  "12:30-1:00", "1:00-1:30", "1:30-2:00", "2:00-2:30", "2:30-3:00", 
-  "3:00-3:30", "3:30-4:00", "4:00-4:30", "4:30-5:00", "5:00-5:30"
+  "7:30-8:00 AM", "8:00-8:30 AM", "8:30-9:00 AM", "9:00-9:30 AM", "9:30-10:00 AM", 
+  "10:00-10:30 AM", "10:30-11:00 AM", "11:00-11:30 AM", "11:30-12:00 PM", "12:00-12:30 PM", 
+  "12:30-1:00 PM", "1:00-1:30 PM", "1:30-2:00 PM", "2:00-2:30 PM", "2:30-3:00 PM", 
+  "3:00-3:30 PM", "3:30-4:00 PM", "4:00-4:30 PM", "4:30-5:00 PM", "5:00-5:30 PM"
 ];
 
 const TIME_SLOT_MAP = {
-  "7:30-8:00": [7.5, 8.0],
-  "8:00-8:30": [8.0, 8.5],
-  "8:30-9:00": [8.5, 9.0],
-  "9:00-9:30": [9.0, 9.5],
-  "9:30-10:00": [9.5, 10.0],
-  "10:00-10:30": [10.0, 10.5],
-  "10:30-11:00": [10.5, 11.0],
-  "11:00-11:30": [11.0, 11.5],
-  "11:30-12:00": [11.5, 12.0],
-  "12:00-12:30": [12.0, 12.5],
-  "12:30-1:00": [12.5, 13.0],
-  "1:00-1:30": [13.0, 13.5],
-  "1:30-2:00": [13.5, 14.0],
-  "2:00-2:30": [14.0, 14.5],
-  "2:30-3:00": [14.5, 15.0],
-  "3:00-3:30": [15.0, 15.5],
-  "3:30-4:00": [15.5, 16.0],
-  "4:00-4:30": [16.0, 16.5],
-  "4:30-5:00": [16.5, 17.0],
-  "5:00-5:30": [17.0, 17.5]
+  "7:30-8:00 AM": [7.5, 8.0],
+  "8:00-8:30 AM": [8.0, 8.5],
+  "8:30-9:00 AM": [8.5, 9.0],
+  "9:00-9:30 AM": [9.0, 9.5],
+  "9:30-10:00 AM": [9.5, 10.0],
+  "10:00-10:30 AM": [10.0, 10.5],
+  "10:30-11:00 AM": [10.5, 11.0],
+  "11:00-11:30 AM": [11.0, 11.5],
+  "11:30-12:00 PM": [11.5, 12.0],
+  "12:00-12:30 PM": [12.0, 12.5],
+  "12:30-1:00 PM": [12.5, 13.0],
+  "1:00-1:30 PM": [13.0, 13.5],
+  "1:30-2:00 PM": [13.5, 14.0],
+  "2:00-2:30 PM": [14.0, 14.5],
+  "2:30-3:00 PM": [14.5, 15.0],
+  "3:00-3:30 PM": [15.0, 15.5],
+  "3:30-4:00 PM": [15.5, 16.0],
+  "4:00-4:30 PM": [16.0, 16.5],
+  "4:30-5:00 PM": [16.5, 17.0],
+  "5:00-5:30 PM": [17.0, 17.5]
 };
 
 export default function TeamScheduleView({ 
@@ -245,6 +246,14 @@ export default function TeamScheduleView({
                               >
                                 {formatPatientName(app.patient)}
                               </span>
+                              {app.team && (
+                                <span 
+                                  className="ml-2 text-xs px-2 py-0.5 rounded-full text-white"
+                                  style={{ backgroundColor: app.team.color || '#6B7280' }}
+                                >
+                                  {app.team.name}
+                                </span>
+                              )}
                             </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
                               {formatTime(app.startTime)} - {formatTime(app.endTime)}
@@ -413,60 +422,24 @@ export default function TeamScheduleView({
                   </h4>
                   
                   <div className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg">
-                    {team.Members?.flatMap(member => {
-                      const therapistApps = getTherapistAppointments(member.id);
-                      return therapistApps.map(app => (
-                        <div 
-                          key={app.id} 
-                          className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
-                          onClick={() => handleAppointmentClick(app)}
-                        >
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <div className="font-medium">
-                                <span 
-                                  title={formatFullPatientName(app.patient)}
-                                  className="cursor-help"
-                                >
-                                  {formatPatientName(app.patient)}
-                                </span>
-                              </div>
-                              <div className="text-sm text-gray-500 dark:text-gray-400">
-                                with {member.firstName} {member.lastName}
-                              </div>
-                            </div>
-                            <div className={cn(
-                              "text-xs px-2 py-1 rounded-full",
-                              SERVICE_TYPE_COLORS[getAppointmentServiceType(app) || 'direct']
-                            )}>
-                              {app.serviceType || getAppointmentServiceType(app) || 'Session'}
-                            </div>
-                          </div>
-                          
-                          <div className="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                            <Clock className="h-4 w-4 mr-1" />
-                            <span>{formatTime(app.startTime)} - {formatTime(app.endTime)}</span>
-                          </div>
-                          
-                          {app.location && (
-                            <div className="mt-1 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                              <MapPin className="h-4 w-4 mr-1" />
-                              <span>{app.location.name}</span>
-                            </div>
-                          )}
-                        </div>
-                      ));
-                    }).sort((a, b) => {
-                      // Sort by appointment start time
-                      const timeA = a.props.children[2].props.children[1].props.children.split(' - ')[0];
-                      const timeB = b.props.children[2].props.children[1].props.children.split(' - ')[0];
-                      const dateA = new Date(`${format(selectedDate, 'yyyy-MM-dd')} ${timeA}`);
-                      const dateB = new Date(`${format(selectedDate, 'yyyy-MM-dd')} ${timeB}`);
-                      return dateA - dateB;
-                    }).length > 0 ? (
-                      team.Members?.flatMap(member => {
+                    {(() => {
+                      // Collect all appointments for the team
+                      const allAppointments = team.Members?.flatMap(member => {
                         const therapistApps = getTherapistAppointments(member.id);
-                        return therapistApps.map(app => (
+                        return therapistApps.map(app => ({
+                          ...app,
+                          therapistName: `${member.firstName} ${member.lastName}`
+                        }));
+                      }) || [];
+                      
+                      // Sort appointments by start time
+                      const sortedAppointments = allAppointments.sort((a, b) => {
+                        return new Date(a.startTime) - new Date(b.startTime);
+                      });
+                      
+                      // Render sorted appointments
+                      return sortedAppointments.length > 0 ? (
+                        sortedAppointments.map(app => (
                           <div 
                             key={app.id} 
                             className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
@@ -481,9 +454,17 @@ export default function TeamScheduleView({
                                   >
                                     {formatPatientName(app.patient)}
                                   </span>
+                                  {app.team && (
+                                    <span 
+                                      className="ml-2 text-xs px-2 py-0.5 rounded-full text-white"
+                                      style={{ backgroundColor: app.team.color || '#6B7280' }}
+                                    >
+                                      {app.team.name}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-sm text-gray-500 dark:text-gray-400">
-                                  with {member.firstName} {member.lastName}
+                                  with {app.therapistName}
                                 </div>
                               </div>
                               <div className={cn(
@@ -506,22 +487,13 @@ export default function TeamScheduleView({
                               </div>
                             )}
                           </div>
-                        ));
-                      }).sort((a, b) => {
-                        // Sort by appointment start time
-                        const getStartTime = (component) => {
-                          const timeText = component.props.children[2].props.children[1].props.children;
-                          const timeStr = timeText.split(' - ')[0];
-                          const dateStr = `${format(selectedDate, 'yyyy-MM-dd')} ${timeStr}`;
-                          return new Date(dateStr);
-                        };
-                        return getStartTime(a) - getStartTime(b);
-                      })
-                    ) : (
-                      <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                        No appointments scheduled for this team today
-                      </div>
-                    )}
+                        ))
+                      ) : (
+                        <div className="p-4 text-center text-gray-500 dark:text-gray-400">
+                          No appointments scheduled for this team today
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </div>

@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../context/auth-context';
 import { useLocation } from 'react-router-dom';
 import { format, addDays, subDays, startOfDay, isSameDay, parseISO, addMinutes } from 'date-fns';
+import { validateAppointmentClient, formatConflictMessages } from '../../utils/conflictDetection';
 import { 
   Calendar, 
   ChevronLeft, 
@@ -21,18 +22,21 @@ import {
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
+import PatientColorSelect from '../../components/PatientColorSelect';
 import { 
   getSchedule, 
   createAppointment, 
   createAppointmentNextSlot, 
   findNextAvailableSlot,
   getTeamSchedule,
+  updateAppointment,
   updateAppointmentTherapist
 } from '../../api/schedule';
 import { getTherapists, getAvailableBCBAs, getPatientsWithAssignments } from '../../api/bcba';
 import { getPatients } from '../../api/patients';
 import { getLocations } from '../../api/admin';
 import { calculateAppointmentStyle, formatTime, generateTimeSlots } from '../../utils/date-utils';
+import { getAppointmentTypeOptions, requiresPatient } from '../../utils/appointmentTypes';
 import TeamScheduleView from '../../components/schedule/TeamScheduleView';
 import EnhancedScheduleView from '../../components/schedule/EnhancedScheduleView';
 import ContractFulfillmentView from '../../components/schedule/ContractFulfillmentView';
@@ -41,6 +45,8 @@ import ExcelScheduleGrid from '../../components/schedule/ExcelScheduleGrid';
 import PatientScheduleGrid from '../../components/schedule/PatientScheduleGrid';
 import LunchScheduleManager from '../../components/schedule/LunchScheduleManager';
 import ContinuityTracker from '../../components/schedule/ContinuityTracker';
+import TeamDropdown from '../../components/TeamDropdown';
+import ViewSelector from '../../components/ViewSelector';
 
 export default function BCBASchedulePage() {
   // Import auth context to get user info
@@ -57,15 +63,39 @@ export default function BCBASchedulePage() {
     }
     return null;
   };
+
+  const resetForm = () => {
+    setFormState({
+      patientId: '',
+      therapistId: '',
+      bcbaId: user?.id || '',
+      locationId: defaultLocation || '',
+      date: format(new Date(), 'yyyy-MM-dd'),
+      startTime: '08:00',
+      endTime: '08:30',
+      title: '',
+      notes: '',
+      serviceType: 'direct',
+      useNextAvailableSlot: false,
+      durationMinutes: 30,
+      preferredDate: '',
+      nextAvailablePreview: null,
+      recurring: false,
+    });
+    setIsFormPreFilled(false);
+  };
   
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [viewType, setViewType] = useState('grid');
   const [selectedTherapist, setSelectedTherapist] = useState(null);
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [selectedLocation, setSelectedLocation] = useState(null);
+  const [selectedTeam, setSelectedTeam] = useState(null);
   const [showFilters, setShowFilters] = useState(false);
   const [selectedAppointment, setSelectedAppointment] = useState(null);
   const [showAppointmentForm, setShowAppointmentForm] = useState(false);
+  const [showEditForm, setShowEditForm] = useState(false);
+  const [editingAppointment, setEditingAppointment] = useState(null);
   const [formError, setFormError] = useState(null);
   const [isCheckingAvailability, setIsCheckingAvailability] = useState(false);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
@@ -83,10 +113,27 @@ export default function BCBASchedulePage() {
     endTime: '08:30',
     title: '',
     notes: '',
+    serviceType: 'direct', // Default to direct service
     useNextAvailableSlot: false,
     durationMinutes: 30,
     preferredDate: '',
     nextAvailablePreview: null,
+    recurring: false,
+  });
+
+  // Edit form state
+  const [editFormState, setEditFormState] = useState({
+    patientId: '',
+    therapistId: '',
+    bcbaId: '',
+    locationId: '',
+    date: '',
+    startTime: '',
+    endTime: '',
+    title: '',
+    notes: '',
+    serviceType: 'direct',
+    status: 'scheduled',
     recurring: false,
     recurringType: 'weekly',
     recurringPattern: {
@@ -178,15 +225,30 @@ export default function BCBASchedulePage() {
   const createAppointmentMutation = useMutation({
     mutationFn: createAppointment,
     onSuccess: (data) => {
-      console.log('Appointment created successfully:', data);
+      console.log('✅ Appointment created successfully:', data);
+      console.log('🔄 Invalidating cache keys for immediate refresh...');
+      
       // Invalidate and refetch all schedule data
       queryClient.invalidateQueries(['bcbaSchedule']);
       queryClient.invalidateQueries(['teamSchedule']);
       queryClient.invalidateQueries(['patients-with-assignments']);
+      queryClient.invalidateQueries(['bcba-patients']);
+      
+      // Force refetch of current view data
+      if (viewType === 'patient' || viewType === 'grid' || viewType === 'team') {
+        queryClient.refetchQueries(['teamSchedule', selectedDate.toISOString()]);
+        // Also force refetch patients data
+        queryClient.refetchQueries(['bcba-patients']);
+      }
+      
+      console.log('📅 Current view type:', viewType);
+      console.log('📊 Selected date:', selectedDate.toISOString());
+      
       setShowAppointmentForm(false);
     },
     onError: (error) => {
-      console.error('Failed to create appointment:', error);
+      console.error('❌ Failed to create appointment:', error);
+      console.error('Error details:', error.response?.data);
     }
   });
   
@@ -205,11 +267,29 @@ export default function BCBASchedulePage() {
       console.error('Failed to create appointment with next slot:', error);
     }
   });
+
+  // Update appointment mutation
+  const updateAppointmentMutation = useMutation({
+    mutationFn: ({ id, data }) => updateAppointment(id, data),
+    onSuccess: (data) => {
+      console.log('Appointment updated successfully:', data);
+      // Invalidate and refetch all schedule data
+      queryClient.invalidateQueries(['bcbaSchedule']);
+      queryClient.invalidateQueries(['teamSchedule']);
+      queryClient.invalidateQueries(['patients-with-assignments']);
+      setShowEditForm(false);
+      setEditingAppointment(null);
+    },
+    onError: (error) => {
+      console.error('Failed to update appointment:', error);
+      setFormError(error.response?.data?.message || 'Failed to update appointment');
+    }
+  });
   
   // Handle appointment form submission
   const handleSubmitAppointment = async () => {
     // Validate form
-    if (!formState.patientId) {
+    if (requiresPatient(formState.serviceType) && !formState.patientId) {
       setFormError('Please select a patient');
       return;
     }
@@ -267,6 +347,36 @@ export default function BCBASchedulePage() {
       setFormError('Please select an end date for recurring appointments');
       return;
     }
+
+    // Enhanced conflict detection for real-time validation
+    if (!formState.useNextAvailableSlot) {
+      const startDateTime = new Date(`${formState.date}T${formState.startTime}`);
+      const endDateTime = new Date(`${formState.date}T${formState.endTime}`);
+      
+      // Get all appointments for conflict checking
+      const allAppointments = scheduleData?.appointments || [];
+      
+      // Validate appointment using enhanced client-side validation
+      const validation = validateAppointmentClient({
+        patientId: formState.patientId,
+        therapistId: formState.therapistId,
+        startTime: startDateTime,
+        endTime: endDateTime
+      }, allAppointments);
+
+      if (!validation.isValid) {
+        const messages = formatConflictMessages(validation);
+        setFormError(messages.errors.join('\n'));
+        return;
+      }
+
+      // Show warnings but allow user to continue
+      if (validation.warnings.length > 0) {
+        const messages = formatConflictMessages(validation);
+        console.log('Appointment warnings:', messages.warnings);
+        // Could show warnings in UI here
+      }
+    }
     
     setIsSubmittingForm(true);
     setFormError(null);
@@ -274,8 +384,8 @@ export default function BCBASchedulePage() {
     try {
       if (formState.useNextAvailableSlot) {
         // Use next available slot
-        await createAppointmentNextSlotMutation.mutateAsync({
-          patientId: formState.patientId,
+        const nextSlotData = {
+          patientId: requiresPatient(formState.serviceType) ? formState.patientId : null,
           therapistId: formState.therapistId,
           bcbaId: formState.bcbaId,
           locationId: finalLocationId,
@@ -283,18 +393,22 @@ export default function BCBASchedulePage() {
           preferredDate: formState.preferredDate || undefined,
           title: formState.title || undefined,
           notes: formState.notes || undefined,
+          serviceType: formState.serviceType,
           recurring: formState.recurring,
           recurringPattern: formState.recurring ? formState.recurringPattern : undefined,
           excludeWeekends: formState.excludeWeekends,
           excludeHolidays: formState.excludeHolidays
-        });
+        };
+        
+        console.log('🚀 Creating appointment with next available slot:', nextSlotData);
+        await createAppointmentNextSlotMutation.mutateAsync(nextSlotData);
       } else {
         // Use specified time
         const startDateTime = new Date(`${formState.date}T${formState.startTime}`);
         const endDateTime = new Date(`${formState.date}T${formState.endTime}`);
         
-        await createAppointmentMutation.mutateAsync({
-          patientId: formState.patientId,
+        const appointmentData = {
+          patientId: requiresPatient(formState.serviceType) ? formState.patientId : null,
           therapistId: formState.therapistId,
           bcbaId: formState.bcbaId,
           locationId: finalLocationId,
@@ -302,14 +416,75 @@ export default function BCBASchedulePage() {
           endTime: endDateTime.toISOString(),
           title: formState.title || undefined,
           notes: formState.notes || undefined,
+          serviceType: formState.serviceType,
           recurring: formState.recurring,
           recurringPattern: formState.recurring ? formState.recurringPattern : undefined,
           excludeWeekends: formState.excludeWeekends,
           excludeHolidays: formState.excludeHolidays
-        });
+        };
+        
+        console.log('🚀 Creating appointment with specified time:', appointmentData);
+        console.log('📅 Start DateTime:', startDateTime.toISOString());
+        console.log('📅 End DateTime:', endDateTime.toISOString());
+        console.log('🎯 Current form state:', formState);
+        
+        await createAppointmentMutation.mutateAsync(appointmentData);
       }
     } catch (error) {
       setFormError(error.response?.data?.message || 'Failed to create appointment');
+    } finally {
+      setIsSubmittingForm(false);
+    }
+  };
+
+  // Handle edit form submission
+  const handleSubmitEdit = async () => {
+    // Validate form
+    if (requiresPatient(editFormState.serviceType) && !editFormState.patientId) {
+      setFormError('Please select a patient');
+      return;
+    }
+    
+    if (!editFormState.therapistId) {
+      setFormError('Please select a therapist');
+      return;
+    }
+    
+    if (!editFormState.bcbaId) {
+      setFormError('Please select a BCBA');
+      return;
+    }
+
+    setIsSubmittingForm(true);
+    setFormError(null);
+
+    try {
+      // Prepare appointment data
+      const startDateTime = new Date(`${editFormState.date}T${editFormState.startTime}`);
+      const endDateTime = new Date(`${editFormState.date}T${editFormState.endTime}`);
+
+      const appointmentData = {
+        patientId: editFormState.patientId || null,
+        therapistId: editFormState.therapistId,
+        bcbaId: editFormState.bcbaId,
+        locationId: editFormState.locationId || null,
+        startTime: startDateTime.toISOString(),
+        endTime: endDateTime.toISOString(),
+        title: editFormState.title || '',
+        notes: editFormState.notes || '',
+        serviceType: editFormState.serviceType,
+        status: editFormState.status,
+        recurring: editFormState.recurring || false,
+      };
+
+      console.log('🔄 Updating appointment:', editingAppointment.id, appointmentData);
+      
+      await updateAppointmentMutation.mutateAsync({ 
+        id: editingAppointment.id, 
+        data: appointmentData 
+      });
+    } catch (error) {
+      setFormError(error.response?.data?.message || 'Failed to update appointment');
     } finally {
       setIsSubmittingForm(false);
     }
@@ -340,6 +515,17 @@ export default function BCBASchedulePage() {
   const { data: patients, isLoading: isLoadingPatients } = useQuery({
     queryKey: ['bcba-patients'],
     queryFn: getPatientsWithAssignments,
+    onSuccess: (data) => {
+      console.log('🏥 Patients data received:', {
+        count: data?.length || 0,
+        firstPatient: data?.[0] ? {
+          id: data[0].id,
+          firstName: data[0].firstName,
+          lastName: data[0].lastName,
+          fullData: data[0]
+        } : null
+      });
+    }
   });
   
   // Fetch schedule data
@@ -382,6 +568,124 @@ export default function BCBASchedulePage() {
     onError: (error) => {
       console.error('Error fetching team schedule:', error);
     }
+  });
+  
+  // Group appointments by therapist
+  const groupAppointmentsByTherapist = () => {
+    if (!scheduleData || !scheduleData.appointments) return {};
+    
+    const groupedAppointments = {};
+    
+    scheduleData.appointments.forEach(appointment => {
+      const therapistId = appointment.therapist?.id;
+      
+      if (!therapistId) return;
+      
+      if (!groupedAppointments[therapistId]) {
+        groupedAppointments[therapistId] = {
+          therapist: appointment.therapist,
+          appointments: []
+        };
+      }
+      
+      groupedAppointments[therapistId].appointments.push(appointment);
+    });
+    
+    return groupedAppointments;
+  };
+  
+  // Group appointments by patient
+  const groupAppointmentsByPatient = () => {
+    if (!scheduleData || !scheduleData.appointments) return {};
+    
+    const groupedAppointments = {};
+    
+    scheduleData.appointments.forEach(appointment => {
+      const patientId = appointment.patient?.id;
+      
+      if (!patientId) return;
+      
+      if (!groupedAppointments[patientId]) {
+        groupedAppointments[patientId] = {
+          patient: appointment.patient,
+          appointments: []
+        };
+      }
+      
+      groupedAppointments[patientId].appointments.push(appointment);
+    });
+    
+    return groupedAppointments;
+  };
+  
+  // Filter team schedule data based on selected team
+  const filteredTeamScheduleData = useMemo(() => {
+    if (!teamScheduleData || !selectedTeam) {
+      return teamScheduleData;
+    }
+    
+    // Filter teams to only show selected team
+    const filteredTeams = (teamScheduleData.teams || []).filter(team => team.id === selectedTeam);
+    
+    // Get all therapist IDs from the selected team
+    const teamTherapistIds = new Set();
+    filteredTeams.forEach(team => {
+      if (team.Members) {
+        team.Members.forEach(member => teamTherapistIds.add(member.id));
+      }
+    });
+    
+    // Filter appointments to only show those for therapists in the selected team
+    const filteredAppointments = (teamScheduleData.appointments || []).filter(appointment => 
+      appointment.therapistId && teamTherapistIds.has(appointment.therapistId)
+    );
+    
+    return {
+      ...teamScheduleData,
+      teams: filteredTeams,
+      appointments: filteredAppointments
+    };
+  }, [teamScheduleData, selectedTeam]);
+
+  // Determine if the current user can edit appointments in the selected team
+  const canEditSelectedTeam = useMemo(() => {
+    // Admins can always edit
+    if (user?.roles?.includes('admin')) {
+      return true;
+    }
+    
+    // If no team is selected, check if user manages any team
+    if (!selectedTeam) {
+      return teamScheduleData?.teams?.some(team => team.isManaged) || false;
+    }
+    
+    // Check if user manages the selected team
+    const selectedTeamData = teamScheduleData?.teams?.find(team => team.id === selectedTeam);
+    return selectedTeamData?.canEdit || false;
+  }, [user, selectedTeam, teamScheduleData]);
+
+  // Filter appointments for daily view by therapist (only when schedule data is available)
+  const therapistGroups = scheduleData ? groupAppointmentsByTherapist() : {};
+  const patientGroups = scheduleData ? groupAppointmentsByPatient() : {};
+  
+  // Loading state - more specific to what each view actually needs
+  const isLoading = 
+    // Basic data that most views need
+    (isLoadingPatients || isLoadingBCBAs) ||
+    // Schedule-specific loading
+    ((viewType === 'daily' || viewType === 'weekly') && isLoadingSchedule) || 
+    ((viewType === 'team' || viewType === 'enhanced' || viewType === 'contract' || viewType === 'unified' || viewType === 'grid' || viewType === 'patient' || viewType === 'lunch' || viewType === 'continuity') && isLoadingTeamSchedule);
+
+  // Debug loading states
+  console.log('🔍 Loading Debug:', {
+    viewType,
+    isLoading,
+    isLoadingPatients,
+    isLoadingBCBAs,
+    isLoadingTeamSchedule,
+    teamScheduleData: !!teamScheduleData,
+    filteredTeamScheduleData: !!filteredTeamScheduleData,
+    appointmentCount: filteredTeamScheduleData?.appointments?.length || 0
   });
   
   // Navigate to previous day/week
@@ -450,6 +754,50 @@ export default function BCBASchedulePage() {
   // Toggle appointment form
   const toggleAppointmentForm = () => {
     setShowAppointmentForm(!showAppointmentForm);
+    if (showAppointmentForm) {
+      setFormError(null);
+      resetForm();
+    }
+  };
+
+  const toggleEditForm = () => {
+    setShowEditForm(!showEditForm);
+    if (showEditForm) {
+      setFormError(null);
+      setEditingAppointment(null);
+    }
+  };
+
+  const openEditForm = (appointment) => {
+    // Check if user can edit the selected team
+    if (!canEditSelectedTeam) {
+      console.log('User cannot edit this team\'s appointments');
+      return; // Exit early - don't open the edit form
+    }
+    
+    // Pre-fill the edit form with appointment data
+    const startTime = format(parseISO(appointment.startTime), 'HH:mm');
+    const endTime = format(parseISO(appointment.endTime), 'HH:mm');
+    const date = format(parseISO(appointment.startTime), 'yyyy-MM-dd');
+    
+    setEditFormState({
+      patientId: appointment.patient?.id || '',
+      therapistId: appointment.therapist?.id || appointment.therapistId || '',
+      bcbaId: appointment.bcba?.id || appointment.bcbaId || '',
+      locationId: appointment.location?.id || appointment.locationId || '',
+      date: date,
+      startTime: startTime,
+      endTime: endTime,
+      title: appointment.title || '',
+      notes: appointment.notes || '',
+      serviceType: appointment.serviceType || 'direct',
+      status: appointment.status || 'scheduled',
+      recurring: appointment.recurring || false,
+    });
+    
+    setEditingAppointment(appointment);
+    setShowEditForm(true);
+    setSelectedAppointment(null); // Close the details modal
   };
   
   // Reset all filters
@@ -457,72 +805,33 @@ export default function BCBASchedulePage() {
     setSelectedTherapist(null);
     setSelectedPatient(null);
     setSelectedLocation(null);
+    setSelectedTeam(null);
   };
   
-  // Group appointments by therapist
-  const groupAppointmentsByTherapist = () => {
-    if (!scheduleData || !scheduleData.appointments) return {};
-    
-    const groupedAppointments = {};
-    
-    scheduleData.appointments.forEach(appointment => {
-      const therapistId = appointment.therapist?.id;
-      
-      if (!therapistId) return;
-      
-      if (!groupedAppointments[therapistId]) {
-        groupedAppointments[therapistId] = {
-          therapist: appointment.therapist,
-          appointments: []
-        };
-      }
-      
-      groupedAppointments[therapistId].appointments.push(appointment);
-    });
-    
-    return groupedAppointments;
-  };
-  
-  // Group appointments by patient
-  const groupAppointmentsByPatient = () => {
-    if (!scheduleData || !scheduleData.appointments) return {};
-    
-    const groupedAppointments = {};
-    
-    scheduleData.appointments.forEach(appointment => {
-      const patientId = appointment.patient?.id;
-      
-      if (!patientId) return;
-      
-      if (!groupedAppointments[patientId]) {
-        groupedAppointments[patientId] = {
-          patient: appointment.patient,
-          appointments: []
-        };
-      }
-      
-      groupedAppointments[patientId].appointments.push(appointment);
-    });
-    
-    return groupedAppointments;
-  };
-  
-  // Filter appointments for daily view by therapist
-  const therapistGroups = groupAppointmentsByTherapist();
-  const patientGroups = groupAppointmentsByPatient();
-  
-  // Loading state
-  const isLoading = isLoadingTherapists || isLoadingLocations || isLoadingPatients || isLoadingBCBAs ||
-                  ((viewType === 'daily' || viewType === 'weekly') && isLoadingSchedule) || 
-                  ((viewType === 'team' || viewType === 'enhanced' || viewType === 'contract' || viewType === 'unified' || viewType === 'grid' || viewType === 'patient' || viewType === 'lunch' || viewType === 'continuity') && isLoadingTeamSchedule);
+  // (Functions moved below after scheduleData declaration)
   
   // Format patient name for display
   const formatPatientName = (patient) => {
     if (!patient) return 'Unknown';
+    
+    console.log('🧑‍⚕️ Formatting patient name:', {
+      id: patient.id,
+      firstName: patient.firstName,
+      lastName: patient.lastName,
+      firstNameType: typeof patient.firstName,
+      firstNameLength: patient.firstName?.length
+    });
+    
     // If names are encrypted/null, use patient ID as fallback
     if (!patient.firstName || patient.firstName === 'null' || patient.firstName.length < 2) {
       return `Patient ${patient.id.substring(0, 8)}`;
     }
+    
+    // Check for encryption placeholder values
+    if (patient.firstName?.includes('[Encrypted') || patient.lastName?.includes('[Encrypted')) {
+      return `Patient ${patient.id.substring(0, 8)}`;
+    }
+    
     const firstTwo = patient.firstName?.substring(0, 2) || '--';
     const lastTwo = patient.lastName?.substring(0, 2) || '--';
     return `${firstTwo}${lastTwo}`;
@@ -557,6 +866,23 @@ export default function BCBASchedulePage() {
 
   // Handle cell click to pre-fill appointment form
   const handleCellClick = ({ therapistId, patientId, timeSlot, selectedDate, teamId, leadBcbaId }) => {
+    console.log('🎯 handleCellClick called with:', {
+      therapistId,
+      patientId,
+      timeSlot,
+      selectedDate,
+      teamId,
+      leadBcbaId,
+      currentViewType: viewType
+    });
+    
+    // Check if user can edit the selected team
+    if (!canEditSelectedTeam) {
+      // Show a message that they can't edit this team's schedule
+      console.log('User cannot edit this team\'s schedule');
+      return; // Exit early - don't open the appointment form
+    }
+    
     const { startTime, endTime } = parseTimeSlot(timeSlot);
     const dateStr = format(new Date(selectedDate), 'yyyy-MM-dd');
     
@@ -564,8 +890,8 @@ export default function BCBASchedulePage() {
     let contextBcbaId = leadBcbaId; // Use passed leadBcbaId first
     let teamLocationId = null;
     
-    if (teamId && teamScheduleData?.teams) {
-      const team = teamScheduleData.teams.find(t => t.id === teamId);
+    if (teamId && filteredTeamScheduleData?.teams) {
+      const team = filteredTeamScheduleData.teams.find(t => t.id === teamId);
       if (team) {
         contextBcbaId = contextBcbaId || team.LeadBCBA?.id;
         // Could add team-specific location logic here if available
@@ -573,8 +899,8 @@ export default function BCBASchedulePage() {
     }
     
     // If no team context but we have a therapist, try to find their team
-    if (!contextBcbaId && therapistId && teamScheduleData?.teams) {
-      const therapistTeam = teamScheduleData.teams.find(team => 
+    if (!contextBcbaId && therapistId && filteredTeamScheduleData?.teams) {
+      const therapistTeam = filteredTeamScheduleData.teams.find(team => 
         team.Members?.some(member => member.id === therapistId)
       );
       if (therapistTeam) {
@@ -591,20 +917,33 @@ export default function BCBASchedulePage() {
     const bestLocationId = defaultLocation || teamLocationId || formState.locationId;
     
     // Pre-fill form with clicked cell data and intelligent defaults
-    setFormState(prev => ({
-      ...prev,
+    const newFormState = {
+      ...formState,
       date: dateStr,
       startTime,
       endTime,
-      therapistId: therapistId || prev.therapistId,
-      patientId: patientId || prev.patientId,
+      therapistId: therapistId || formState.therapistId,
+      patientId: patientId || formState.patientId,
       bcbaId: bestBcbaId,
       locationId: bestLocationId,
       // Reset other fields to defaults
       useNextAvailableSlot: false,
       title: '',
       notes: ''
-    }));
+    };
+    
+    console.log('📝 Pre-filling appointment form with:', {
+      dateStr,
+      startTime,
+      endTime,
+      therapistId: therapistId || formState.therapistId,
+      patientId: patientId || formState.patientId,
+      bcbaId: bestBcbaId,
+      locationId: bestLocationId,
+      newFormState
+    });
+    
+    setFormState(newFormState);
     
     // Mark form as pre-filled to prevent reset
     setIsFormPreFilled(true);
@@ -617,64 +956,48 @@ export default function BCBASchedulePage() {
       <div className="flex flex-col sm:flex-row justify-between items-center mb-4 space-y-2 sm:space-y-0">
         <h1 className="text-2xl font-bold">Schedule</h1>
         
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 flex-wrap gap-2">
+          {/* Team Filter Dropdown */}
+          <TeamDropdown
+            teams={teamScheduleData?.teams || []}
+            selectedTeam={selectedTeam}
+            onChange={setSelectedTeam}
+            placeholder="All Teams"
+            className="w-48"
+          />
+          
           <Button variant="outline" size="sm" onClick={toggleFilters}>
             <Filter className="h-4 w-4 mr-2" />
             Filters
           </Button>
           
-          <Button variant="outline" size="sm" onClick={navigatePrevious}>
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
+          <div className="flex items-center space-x-1">
+            <Button variant="outline" size="sm" onClick={navigatePrevious}>
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            
+            <Button variant="outline" size="sm" onClick={navigateToday}>
+              Today
+            </Button>
+            
+            <Button variant="outline" size="sm" onClick={navigateNext}>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
           
-          <Button variant="outline" size="sm" onClick={navigateToday}>
-            Today
-          </Button>
+          {/* View Selector Dropdown */}
+          <ViewSelector
+            value={viewType}
+            onChange={setViewType}
+            className="w-44"
+          />
           
-          <Button variant="outline" size="sm" onClick={navigateNext}>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          
-          <Button variant="outline" size="sm" onClick={toggleViewType}>
-            {viewType === 'grid' ? (
-              <>
-                <User className="h-4 w-4 mr-2" />
-                <span>Patient View</span>
-              </>
-            ) : viewType === 'patient' ? (
-              <>
-                <Coffee className="h-4 w-4 mr-2" />
-                <span>Lunch Manager</span>
-              </>
-            ) : viewType === 'lunch' ? (
-              <>
-                <BarChart3 className="h-4 w-4 mr-2" />
-                <span>Continuity</span>
-              </>
-            ) : viewType === 'continuity' ? (
-              <>
-                <Users className="h-4 w-4 mr-2" />
-                <span>Team View</span>
-              </>
-            ) : viewType === 'team' ? (
-              <>
-                <Settings className="h-4 w-4 mr-2" />
-                <span>Enhanced</span>
-              </>
-            ) : viewType === 'enhanced' ? (
-              <>
-                <Calendar className="h-4 w-4 mr-2" />
-                <span>Unified</span>
-              </>
-            ) : (
-              <>
-                <Clock className="h-4 w-4 mr-2" />
-                <span>Grid View</span>
-              </>
-            )}
-          </Button>
-          
-          <Button size="sm" onClick={toggleAppointmentForm}>
+          <Button 
+            size="sm" 
+            onClick={toggleAppointmentForm}
+            disabled={!canEditSelectedTeam}
+            title={!canEditSelectedTeam ? "You can only create appointments for teams you manage" : ""}
+          >
             <Plus className="h-4 w-4 mr-2" />
             New Appointment
           </Button>
@@ -703,18 +1026,12 @@ export default function BCBASchedulePage() {
             
             <div>
               <label className="block text-sm font-medium mb-1">Patient</label>
-              <select 
-                className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                value={selectedPatient || ''}
+              <PatientColorSelect
+                patients={patients}
+                value={selectedPatient}
                 onChange={(e) => setSelectedPatient(e.target.value || null)}
-              >
-                <option value="">All Patients</option>
-                {patients?.map(patient => (
-                  <option key={patient.id} value={patient.id}>
-                    {formatPatientName(patient)}
-                  </option>
-                ))}
-              </select>
+                showAll={true}
+              />
             </div>
             
           </div>
@@ -772,8 +1089,8 @@ export default function BCBASchedulePage() {
             </div>
           ) : (
             <ExcelScheduleGrid
-              teams={teamScheduleData?.teams || []}
-              appointments={teamScheduleData?.appointments || []}
+              teams={filteredTeamScheduleData?.teams || []}
+              appointments={filteredTeamScheduleData?.appointments || []}
               patients={patients || []}
               selectedDate={selectedDate}
               onAppointmentClick={handleAppointmentClick}
@@ -782,14 +1099,17 @@ export default function BCBASchedulePage() {
               }}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               viewMode="team"
+              canEdit={canEditSelectedTeam}
             />
           )}
         </div>
       )}
       
       {/* Patient-focused Grid View */}
+      {/* Patient-focused Grid View */}
       {!isLoading && viewType === 'patient' && (
         <div className="flex-1 overflow-y-auto">
+          
           {isLoadingTeamSchedule ? (
             <div className="flex justify-center items-center h-full">
               <p>Loading patient schedules...</p>
@@ -801,16 +1121,26 @@ export default function BCBASchedulePage() {
             </div>
           ) : (
             <PatientScheduleGrid
+              key={`patient-grid-${selectedDate.toISOString()}-${filteredTeamScheduleData?.appointments?.length || 0}`}
               patients={patients || []}
-              appointments={teamScheduleData?.appointments || []}
+              appointments={(filteredTeamScheduleData?.appointments || []).map(app => ({
+                ...app,
+                patientId: app.patientId || app.patient?.id // Fix missing patientId
+              }))}
               therapists={therapists || []}
               selectedDate={selectedDate}
               onAppointmentClick={handleAppointmentClick}
               onGapClick={({ patientId, timeSlot }) => {
-                console.log('Gap clicked:', { patientId, timeSlot });
-                // TODO: Open assignment modal for uncovered session
+                if (canEditSelectedTeam) {
+                  console.log('Gap clicked:', { patientId, timeSlot });
+                  // TODO: Open assignment modal for uncovered session
+                }
               }}
               onTherapistAssignment={async ({ appointmentId, therapistId, patientId, action }) => {
+                if (!canEditSelectedTeam) {
+                  console.log('User cannot edit this team\'s assignments');
+                  return;
+                }
                 try {
                   console.log('Updating therapist assignment:', { appointmentId, therapistId, patientId, action });
                   await updateAppointmentTherapist(appointmentId, therapistId);
@@ -827,6 +1157,7 @@ export default function BCBASchedulePage() {
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               showOnlyUncovered={false}
               viewMode="columns"
+              canEdit={canEditSelectedTeam}
             />
           )}
         </div>
@@ -846,9 +1177,9 @@ export default function BCBASchedulePage() {
             </div>
           ) : (
             <LunchScheduleManager
-              teams={teamScheduleData?.teams || []}
+              teams={filteredTeamScheduleData?.teams || []}
               therapists={therapists || []}
-              appointments={teamScheduleData?.appointments || []}
+              appointments={filteredTeamScheduleData?.appointments || []}
               selectedDate={selectedDate}
               onLunchScheduled={(lunchAppointment) => {
                 console.log('Individual lunch scheduled:', lunchAppointment);
@@ -890,7 +1221,7 @@ export default function BCBASchedulePage() {
           ) : (
             <ContinuityTracker
               patients={patients || []}
-              appointments={teamScheduleData?.appointments || []}
+              appointments={filteredTeamScheduleData?.appointments || []}
               therapists={therapists || []}
               selectedDate={selectedDate}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
@@ -914,7 +1245,7 @@ export default function BCBASchedulePage() {
             </div>
           ) : (
             <UnifiedScheduleView
-              appointments={teamScheduleData?.appointments || []}
+              appointments={filteredTeamScheduleData?.appointments || []}
               patients={patients || []}
               therapists={therapists || []}
               selectedDate={selectedDate}
@@ -1193,17 +1524,18 @@ export default function BCBASchedulePage() {
               <p className="text-red-500 mb-4">Failed to load team schedule</p>
               <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
             </div>
-          ) : teamScheduleData?.appointments?.length > 0 || teamScheduleData?.teams?.length > 0 ? (
+          ) : filteredTeamScheduleData?.appointments?.length > 0 || filteredTeamScheduleData?.teams?.length > 0 ? (
             <TeamScheduleView 
-              teams={teamScheduleData.teams || []} 
-              appointments={teamScheduleData.appointments || []} 
+              teams={filteredTeamScheduleData?.teams || []} 
+              appointments={filteredTeamScheduleData?.appointments || []} 
               selectedDate={selectedDate}
-              showLocationView={teamScheduleData.teams?.length === 0}
+              showLocationView={filteredTeamScheduleData?.teams?.length === 0}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               onAppointmentClick={handleAppointmentClick}
               onCellClick={({ therapistId, timeSlot, selectedDate, teamId, leadBcbaId }) => {
                 handleCellClick({ therapistId, timeSlot, selectedDate, teamId, leadBcbaId });
               }}
+              canEdit={canEditSelectedTeam}
             />
           ) : (
             <div className="p-8 text-center text-gray-500 dark:text-gray-400">
@@ -1226,13 +1558,13 @@ export default function BCBASchedulePage() {
               <p className="text-red-500 mb-4">Failed to load team schedule</p>
               <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
             </div>
-          ) : teamScheduleData?.appointments?.length > 0 || teamScheduleData?.teams?.length > 0 ? (
+          ) : filteredTeamScheduleData?.appointments?.length > 0 || filteredTeamScheduleData?.teams?.length > 0 ? (
             <EnhancedScheduleView 
-              teams={teamScheduleData.teams || []} 
-              appointments={teamScheduleData.appointments || []} 
+              teams={filteredTeamScheduleData?.teams || []} 
+              appointments={filteredTeamScheduleData?.appointments || []} 
               selectedDate={selectedDate}
               onAppointmentClick={handleAppointmentClick}
-              showLocationView={teamScheduleData.teams?.length === 0}
+              showLocationView={filteredTeamScheduleData?.teams?.length === 0}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               onAppointmentUpdate={(updatedAppointment) => {
                 console.log('Appointment update requested:', updatedAppointment);
@@ -1265,7 +1597,7 @@ export default function BCBASchedulePage() {
           ) : (
             <ContractFulfillmentView 
               patients={patients || []}
-              appointments={teamScheduleData?.appointments || []}
+              appointments={filteredTeamScheduleData?.appointments || []}
             />
           )}
         </div>
@@ -1340,15 +1672,14 @@ export default function BCBASchedulePage() {
                 >
                   View Patient
                 </Button>
-                <Button 
-                  variant="default" 
-                  onClick={() => {
-                    // Edit appointment (to be implemented)
-                    closeAppointmentDetails();
-                  }}
-                >
-                  Edit
-                </Button>
+                {canEditSelectedTeam && (
+                  <Button 
+                    variant="default" 
+                    onClick={() => openEditForm(selectedAppointment)}
+                  >
+                    Edit
+                  </Button>
+                )}
               </div>
             </div>
           </div>
@@ -1386,23 +1717,57 @@ export default function BCBASchedulePage() {
             
             <div className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Patient Selection */}
+                {/* Appointment Type Selection */}
                 <div>
-                  <label className="block text-sm font-medium mb-1">Patient *</label>
+                  <label className="block text-sm font-medium mb-1">Appointment Type *</label>
                   <select 
                     className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                    value={formState.patientId || ''}
-                    onChange={(e) => setFormState({...formState, patientId: e.target.value})}
+                    value={formState.serviceType || 'direct'}
+                    onChange={(e) => {
+                      const newServiceType = e.target.value;
+                      setFormState({
+                        ...formState, 
+                        serviceType: newServiceType,
+                        // Clear patient if not required
+                        patientId: requiresPatient(newServiceType) ? formState.patientId : ''
+                      });
+                    }}
                     required
                   >
-                    <option value="">Select a patient</option>
-                    {patients?.map(patient => (
-                      <option key={patient.id} value={patient.id}>
-                        {formatPatientName(patient)}
+                    {getAppointmentTypeOptions({ isBCBA: user?.roles?.includes('bcba') }).map(type => (
+                      <option key={type.value} value={type.value}>
+                        {type.icon} {type.label}
                       </option>
                     ))}
                   </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {getAppointmentTypeOptions({ isBCBA: user?.roles?.includes('bcba') }).find(t => t.value === formState.serviceType)?.description}
+                  </p>
                 </div>
+
+                {/* Patient Selection - Only show for direct services */}
+                {requiresPatient(formState.serviceType) ? (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Patient *</label>
+                    <PatientColorSelect
+                      patients={patients}
+                      value={formState.patientId}
+                      onChange={(e) => setFormState({...formState, patientId: e.target.value})}
+                      required={true}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Title (Optional)</label>
+                    <input
+                      type="text"
+                      className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                      placeholder={`e.g., ${formState.serviceType === 'lunch' ? 'Lunch Break' : formState.serviceType === 'indirect' ? 'Documentation' : 'Meeting'}`}
+                      value={formState.title || ''}
+                      onChange={(e) => setFormState({...formState, title: e.target.value})}
+                    />
+                  </div>
+                )}
                 
                 {/* Therapist Selection */}
                 <div>
@@ -1699,6 +2064,245 @@ export default function BCBASchedulePage() {
                   disabled={isSubmittingForm}
                 >
                   {isSubmittingForm ? 'Creating...' : 'Create Appointment'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Appointment Form */}
+      {showEditForm && editingAppointment && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full p-6">
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h2 className="text-xl font-bold">Edit Appointment</h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  Editing: {editingAppointment.title || `${editingAppointment.serviceType} appointment`}
+                </p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={toggleEditForm}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Appointment Type Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Appointment Type *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={editFormState.serviceType || 'direct'}
+                    onChange={(e) => {
+                      const newServiceType = e.target.value;
+                      setEditFormState({
+                        ...editFormState, 
+                        serviceType: newServiceType,
+                        // Clear patient if not required
+                        patientId: requiresPatient(newServiceType) ? editFormState.patientId : ''
+                      });
+                    }}
+                    required
+                  >
+                    {getAppointmentTypeOptions({ isBCBA: user?.roles?.includes('bcba') }).map(type => (
+                      <option key={type.value} value={type.value}>
+                        {type.icon} {type.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {getAppointmentTypeOptions({ isBCBA: user?.roles?.includes('bcba') }).find(t => t.value === editFormState.serviceType)?.description}
+                  </p>
+                </div>
+
+                {/* Patient Selection - Only show for direct services */}
+                {requiresPatient(editFormState.serviceType) ? (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Patient *</label>
+                    <PatientColorSelect
+                      patients={patients}
+                      value={editFormState.patientId}
+                      onChange={(e) => setEditFormState({...editFormState, patientId: e.target.value})}
+                      required={true}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Title</label>
+                    <input
+                      type="text"
+                      className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                      placeholder={`e.g., ${editFormState.serviceType === 'lunch' ? 'Lunch Break' : editFormState.serviceType === 'indirect' ? 'Documentation' : 'Meeting'}`}
+                      value={editFormState.title || ''}
+                      onChange={(e) => setEditFormState({...editFormState, title: e.target.value})}
+                    />
+                  </div>
+                )}
+                
+                {/* Therapist Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Therapist *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={editFormState.therapistId || ''}
+                    onChange={(e) => setEditFormState({...editFormState, therapistId: e.target.value})}
+                    required
+                  >
+                    <option value="">Select a therapist</option>
+                    {therapists?.map(therapist => (
+                      <option key={therapist.id} value={therapist.id}>
+                        {therapist.firstName} {therapist.lastName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                
+                {/* BCBA Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">BCBA *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={editFormState.bcbaId || ''}
+                    onChange={(e) => setEditFormState({...editFormState, bcbaId: e.target.value})}
+                    required
+                  >
+                    <option value="">Select a BCBA</option>
+                    {bcbas && bcbas.length > 0 ? (
+                      bcbas.map(bcba => (
+                        <option key={bcba.id} value={bcba.id}>
+                          {bcba.firstName} {bcba.lastName}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="" disabled>Loading BCBAs...</option>
+                    )}
+                  </select>
+                </div>
+                
+                {/* Location Selection */}
+                {user?.roles?.includes('admin') && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1">Location</label>
+                    <select 
+                      className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                      value={editFormState.locationId || ''}
+                      onChange={(e) => setEditFormState({...editFormState, locationId: e.target.value})}
+                    >
+                      <option value="">Select a location</option>
+                      {locations?.map(location => (
+                        <option key={location.id} value={location.id}>
+                          {location.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* Status Selection */}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Status</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={editFormState.status || 'scheduled'}
+                    onChange={(e) => setEditFormState({...editFormState, status: e.target.value})}
+                  >
+                    <option value="scheduled">Scheduled</option>
+                    <option value="completed">Completed</option>
+                    <option value="cancelled">Cancelled</option>
+                    <option value="no-show">No Show</option>
+                  </select>
+                </div>
+              </div>
+              
+              {/* Date and Time */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Date *</label>
+                  <input
+                    type="date"
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={editFormState.date || ''}
+                    onChange={(e) => setEditFormState({...editFormState, date: e.target.value})}
+                    required
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium mb-1">Start Time *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={editFormState.startTime || ''}
+                    onChange={(e) => setEditFormState({...editFormState, startTime: e.target.value})}
+                    required
+                  >
+                    <option value="">Select start time</option>
+                    {timeSlots.map(time => (
+                      <option key={formatTime(time, 'HH:mm')} value={formatTime(time, 'HH:mm')}>{formatTime(time, 'h:mm a')}</option>
+                    ))}
+                  </select>
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium mb-1">End Time *</label>
+                  <select 
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={editFormState.endTime || ''}
+                    onChange={(e) => setEditFormState({...editFormState, endTime: e.target.value})}
+                    required
+                  >
+                    <option value="">Select end time</option>
+                    {timeSlots.map(time => (
+                      <option key={formatTime(time, 'HH:mm')} value={formatTime(time, 'HH:mm')}>{formatTime(time, 'h:mm a')}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              
+              {/* Notes */}
+              <div>
+                <label className="block text-sm font-medium mb-1">Notes (Optional)</label>
+                <textarea
+                  className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                  rows="3"
+                  placeholder="Add any notes about this appointment..."
+                  value={editFormState.notes || ''}
+                  onChange={(e) => setEditFormState({...editFormState, notes: e.target.value})}
+                />
+              </div>
+
+              {/* Recurring Option */}
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="editRecurring"
+                  className="mr-2"
+                  checked={editFormState.recurring || false}
+                  onChange={(e) => setEditFormState({...editFormState, recurring: e.target.checked})}
+                />
+                <label htmlFor="editRecurring" className="text-sm font-medium">
+                  Recurring appointment
+                </label>
+              </div>
+              
+              {/* Error Display */}
+              {formError && (
+                <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-md p-3">
+                  <p className="text-sm text-red-800 dark:text-red-400">{formError}</p>
+                </div>
+              )}
+              
+              {/* Form Actions */}
+              <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <Button variant="outline" onClick={toggleEditForm}>
+                  Cancel
+                </Button>
+                <Button 
+                  onClick={handleSubmitEdit}
+                  disabled={isSubmittingForm}
+                >
+                  {isSubmittingForm ? 'Updating...' : 'Update Appointment'}
                 </Button>
               </div>
             </div>

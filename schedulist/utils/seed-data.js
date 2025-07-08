@@ -1,17 +1,43 @@
 const { faker } = require('@faker-js/faker');
-const bcrypt = require('bcrypt');
-const crypto = require('crypto');
+const { addDays, subDays, addMonths, subMonths, startOfWeek, setHours, setMinutes } = require('date-fns');
 const db = require('../src/models');
-const { addDays, subDays, addHours, addMonths, subMonths } = require('date-fns');
 
 // Number of users and entities to create
 const NUM_ADMINS = 2;
 const NUM_BCBAS = 5;
-const NUM_THERAPISTS = 10;
-const NUM_PATIENTS = 30;
-const NUM_LOCATIONS = 3;
-const APPOINTMENTS_PER_PATIENT = 5;
-const NOTES_PER_PATIENT = 3;
+const NUM_THERAPISTS = 15;
+const NUM_PATIENTS = 25;
+const NUM_LOCATIONS = 4;
+const APPOINTMENTS_PER_PATIENT = 30; // Increased for more appointments
+const NOTES_PER_PATIENT = 8;
+const WEEKS_TO_SCHEDULE = 8; // Schedule appointments for 8 weeks
+
+// Patient color palette for visual identification
+const PATIENT_COLORS = [
+  '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+  '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
+  '#F8C471', '#82E0AA', '#F1948A', '#85D8E0', '#D7BDE2',
+  '#A9DFBF', '#F9E79F', '#D5A6BD', '#AED6F1', '#F4D03F',
+  '#C39BD3', '#7FB3D3', '#76D7C4', '#F7DC6F', '#D2B4DE'
+];
+
+// Comprehensive insurance providers
+const INSURANCE_PROVIDERS = [
+  'Blue Cross Blue Shield', 'Aetna', 'Cigna', 'UnitedHealthcare', 
+  'Humana', 'Kaiser Permanente', 'Anthem', 'Molina Healthcare',
+  'Centene', 'Independence Blue Cross', 'Medicare', 'Medicaid',
+  'Tricare', 'BCBS Federal', 'Oscar Health'
+];
+
+// Appointment types with required hours distribution AND patient requirements
+const APPOINTMENT_TYPE_DISTRIBUTION = {
+  direct: { weight: 0.70, avgHours: 2.0, requiresPatient: true },       // 70% direct therapy - NEEDS PATIENT
+  indirect: { weight: 0.10, avgHours: 1.0, requiresPatient: false },    // 10% documentation/prep - NO PATIENT
+  supervision: { weight: 0.08, avgHours: 1.5, requiresPatient: false }, // 8% supervision - NO PATIENT
+  lunch: { weight: 0.05, avgHours: 0.5, requiresPatient: false },       // 5% lunch breaks - NO PATIENT
+  circle: { weight: 0.04, avgHours: 1.0, requiresPatient: true },       // 4% group activities - NEEDS PATIENT
+  cleaning: { weight: 0.03, avgHours: 0.5, requiresPatient: false }     // 3% cleaning time - NO PATIENT
+};
 
 // Organization data
 const ORGANIZATIONS = {
@@ -73,6 +99,13 @@ const TEST_USERS = {
     firstName: 'Brian',
     lastName: 'BCBA',
     email: 'bcba@sunshine.com',
+    password: 'Password123',
+    organization: 'active'
+  },
+  sunshineBCBA2: {
+    firstName: 'Barbara',
+    lastName: 'BCBA',
+    email: 'bcba2@sunshine.com',
     password: 'Password123',
     organization: 'active'
   },
@@ -171,143 +204,64 @@ const seedDatabase = async () => {
     const createdUsers = {};
     
     // Organization 1 - Active subscription (Sunshine Therapy)
-    createdUsers.sunshineAdmin = await createUserWithOrg(
-      TEST_USERS.sunshineAdmin, 
-      createdOrgs.active.id,
-      adminRole
-    );
+    createdUsers.sunshineAdmin = await createUserWithOrg(TEST_USERS.sunshineAdmin, createdOrgs.active.id, adminRole);
+    createdUsers.sunshineBCBA = await createUserWithOrg(TEST_USERS.sunshineBCBA, createdOrgs.active.id, bcbaRole);
+    createdUsers.sunshineBCBA2 = await createUserWithOrg(TEST_USERS.sunshineBCBA2, createdOrgs.active.id, bcbaRole);
+    createdUsers.sunshineTherapist = await createUserWithOrg(TEST_USERS.sunshineTherapist, createdOrgs.active.id, therapistRole);
     
-    createdUsers.sunshineBCBA = await createUserWithOrg(
-      TEST_USERS.sunshineBCBA,
-      createdOrgs.active.id,
-      bcbaRole
-    );
-    
-    createdUsers.sunshineTherapist = await createUserWithOrg(
-      TEST_USERS.sunshineTherapist,
-      createdOrgs.active.id,
-      therapistRole
-    );
-    
-    // Organization 2 - Expiring subscription (Healing Hearts)  
-    createdUsers.heartsAdmin = await createUserWithOrg(
-      TEST_USERS.heartsAdmin,
-      createdOrgs.expiring.id,
-      adminRole
-    );
-    
-    createdUsers.heartsBCBA = await createUserWithOrg(
-      TEST_USERS.heartsBCBA,
-      createdOrgs.expiring.id,
-      bcbaRole
-    );
-    
-    createdUsers.heartsTherapist = await createUserWithOrg(
-      TEST_USERS.heartsTherapist,
-      createdOrgs.expiring.id,
-      therapistRole
-    );
+    // Organization 2 - Expiring subscription (Healing Hearts)
+    createdUsers.heartsAdmin = await createUserWithOrg(TEST_USERS.heartsAdmin, createdOrgs.expiring.id, adminRole);
+    createdUsers.heartsBCBA = await createUserWithOrg(TEST_USERS.heartsBCBA, createdOrgs.expiring.id, bcbaRole);
+    createdUsers.heartsTherapist = await createUserWithOrg(TEST_USERS.heartsTherapist, createdOrgs.expiring.id, therapistRole);
     
     // Organization 3 - Inactive subscription (Coastal Behavior)
-    createdUsers.coastalAdmin = await createUserWithOrg(
-      TEST_USERS.coastalAdmin,
-      createdOrgs.inactive.id,
-      adminRole
-    );
+    createdUsers.coastalAdmin = await createUserWithOrg(TEST_USERS.coastalAdmin, createdOrgs.inactive.id, adminRole);
+    createdUsers.coastalBCBA = await createUserWithOrg(TEST_USERS.coastalBCBA, createdOrgs.inactive.id, bcbaRole);
+    createdUsers.coastalTherapist = await createUserWithOrg(TEST_USERS.coastalTherapist, createdOrgs.inactive.id, therapistRole);
     
-    createdUsers.coastalBCBA = await createUserWithOrg(
-      TEST_USERS.coastalBCBA,
-      createdOrgs.inactive.id,
-      bcbaRole
-    );
-    
-    createdUsers.coastalTherapist = await createUserWithOrg(
-      TEST_USERS.coastalTherapist,
-      createdOrgs.inactive.id,
-      therapistRole
-    );
-    
-    console.log('Created test users for all organizations');
+    console.log('Test users created for all organizations');
     
     // Create additional users for each organization
     const orgAdditionalUsers = {
-      active: {
-        admins: [],
-        bcbas: [],
-        therapists: []
-      },
-      expiring: {
-        admins: [],
-        bcbas: [],
-        therapists: []
-      },
-      inactive: {
-        admins: [],
-        bcbas: [],
-        therapists: []
-      }
+      active: { admins: [], bcbas: [], therapists: [] },
+      expiring: { admins: [], bcbas: [], therapists: [] },
+      inactive: { admins: [], bcbas: [], therapists: [] }
     };
     
-    // Create additional users for active organization (Sunshine)
-    orgAdditionalUsers.active.admins = await Promise.all(
-      Array(1).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.active.id);
-        await user.addRole(adminRole);
-        return user;
-      })
-    );
+    // Active organization (Sunshine)
+    for (let i = 1; i < NUM_ADMINS; i++) {
+      const admin = await createUserWithOrg(null, createdOrgs.active.id, adminRole);
+      orgAdditionalUsers.active.admins.push(admin);
+    }
     
-    orgAdditionalUsers.active.bcbas = await Promise.all(
-      Array(3).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.active.id);
-        await user.addRole(bcbaRole);
-        return user;
-      })
-    );
+    for (let i = 2; i < NUM_BCBAS; i++) {
+      const bcba = await createUserWithOrg(null, createdOrgs.active.id, bcbaRole);
+      orgAdditionalUsers.active.bcbas.push(bcba);
+    }
     
-    orgAdditionalUsers.active.therapists = await Promise.all(
-      Array(8).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.active.id);
-        await user.addRole(therapistRole);
-        return user;
-      })
-    );
+    for (let i = 1; i < NUM_THERAPISTS - 2; i++) {
+      const therapist = await createUserWithOrg(null, createdOrgs.active.id, therapistRole);
+      orgAdditionalUsers.active.therapists.push(therapist);
+    }
     
-    // Create additional users for expiring organization (Hearts)
-    orgAdditionalUsers.expiring.bcbas = await Promise.all(
-      Array(2).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.expiring.id);
-        await user.addRole(bcbaRole);
-        return user;
-      })
-    );
+    // Expiring organization (Hearts) - fewer users
+    for (let i = 0; i < 1; i++) {
+      const bcba = await createUserWithOrg(null, createdOrgs.expiring.id, bcbaRole);
+      orgAdditionalUsers.expiring.bcbas.push(bcba);
+    }
     
-    orgAdditionalUsers.expiring.therapists = await Promise.all(
-      Array(4).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.expiring.id);
-        await user.addRole(therapistRole);
-        return user;
-      })
-    );
+    for (let i = 0; i < 3; i++) {
+      const therapist = await createUserWithOrg(null, createdOrgs.expiring.id, therapistRole);
+      orgAdditionalUsers.expiring.therapists.push(therapist);
+    }
     
-    // Create additional users for inactive organization (Coastal)
-    orgAdditionalUsers.inactive.bcbas = await Promise.all(
-      Array(2).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.inactive.id);
-        await user.addRole(bcbaRole);
-        return user;
-      })
-    );
+    // Inactive organization (Coastal) - minimal users
+    for (let i = 0; i < 1; i++) {
+      const therapist = await createUserWithOrg(null, createdOrgs.inactive.id, therapistRole);
+      orgAdditionalUsers.inactive.therapists.push(therapist);
+    }
     
-    orgAdditionalUsers.inactive.therapists = await Promise.all(
-      Array(3).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.inactive.id);
-        await user.addRole(therapistRole);
-        return user;
-      })
-    );
-    
-    console.log('Created additional users for all organizations');
+    console.log('Additional users created for all organizations');
     
     // Create locations for each organization
     const orgLocations = {
@@ -316,22 +270,21 @@ const seedDatabase = async () => {
       inactive: []
     };
     
-    // Create locations for active organization (Sunshine)
-    orgLocations.active = await Promise.all(
-      Array(3).fill().map(() => createLocation(createdOrgs.active.id))
-    );
+    // Active organization locations
+    for (let i = 0; i < NUM_LOCATIONS - 1; i++) {
+      const location = await createLocation(createdOrgs.active.id);
+      orgLocations.active.push(location);
+    }
     
-    // Create locations for expiring organization (Hearts)
-    orgLocations.expiring = await Promise.all(
-      Array(2).fill().map(() => createLocation(createdOrgs.expiring.id))
-    );
+    // Expiring organization locations (just 1)
+    const expiringLocation = await createLocation(createdOrgs.expiring.id);
+    orgLocations.expiring.push(expiringLocation);
     
-    // Create locations for inactive organization (Coastal)
-    orgLocations.inactive = await Promise.all(
-      Array(1).fill().map(() => createLocation(createdOrgs.inactive.id))
-    );
+    // Inactive organization locations (just 1)
+    const inactiveLocation = await createLocation(createdOrgs.inactive.id);
+    orgLocations.inactive.push(inactiveLocation);
     
-    console.log('Created locations for all organizations');
+    console.log('Locations created for all organizations');
     
     // Create patients for each organization
     const orgPatients = {
@@ -340,43 +293,75 @@ const seedDatabase = async () => {
       inactive: []
     };
     
-    // Create patients for active organization (Sunshine)
-    orgPatients.active = await Promise.all(
-      Array(15).fill().map(() => createPatient(createdOrgs.active.id))
-    );
+    // Active organization patients (most patients)
+    for (let i = 0; i < NUM_PATIENTS - 5; i++) {
+      const patient = await createPatient(createdOrgs.active.id, i);
+      orgPatients.active.push(patient);
+    }
     
-    // Create patients for expiring organization (Hearts)
-    orgPatients.expiring = await Promise.all(
-      Array(10).fill().map(() => createPatient(createdOrgs.expiring.id))
-    );
+    // Expiring organization patients
+    for (let i = 0; i < 4; i++) {
+      const patient = await createPatient(createdOrgs.expiring.id, NUM_PATIENTS - 5 + i);
+      orgPatients.expiring.push(patient);
+    }
     
-    // Create patients for inactive organization (Coastal)
-    orgPatients.inactive = await Promise.all(
-      Array(5).fill().map(() => createPatient(createdOrgs.inactive.id))
-    );
+    // Inactive organization patients (just 1)
+    const inactivePatient = await createPatient(createdOrgs.inactive.id, NUM_PATIENTS - 1);
+    orgPatients.inactive.push(inactivePatient);
     
-    console.log('Created patients for all organizations');
+    console.log('Patients created for all organizations');
     
-    // Assign patients to BCBAs and therapists for each organization
+    // Assign patients to BCBAs and therapists with varied workloads
     // Active organization (Sunshine)
-    const activeBCBAs = [createdUsers.sunshineBCBA, ...orgAdditionalUsers.active.bcbas];
+    const activeBCBAs = [createdUsers.sunshineBCBA, createdUsers.sunshineBCBA2, ...orgAdditionalUsers.active.bcbas];
     const activeTherapists = [createdUsers.sunshineTherapist, ...orgAdditionalUsers.active.therapists];
     
+    // Track patient counts for load balancing
+    const therapistPatientCounts = new Map();
+    const bcbaPatientCounts = new Map();
+    activeTherapists.forEach(t => therapistPatientCounts.set(t.id, 0));
+    activeBCBAs.forEach(b => bcbaPatientCounts.set(b.id, 0));
+    
+    // Define therapist load categories
+    const therapistCategories = activeTherapists.map((t, idx) => {
+      if (idx < Math.floor(activeTherapists.length * 0.3)) {
+        return { therapist: t, maxPatients: 8, category: 'full' }; // 30% have full load
+      } else if (idx < Math.floor(activeTherapists.length * 0.6)) {
+        return { therapist: t, maxPatients: 5, category: 'medium' }; // 30% have medium load
+      } else {
+        return { therapist: t, maxPatients: 2, category: 'light' }; // 40% have light load
+      }
+    });
+    
     for (const patient of orgPatients.active) {
-      // Assign to 1 or 2 BCBAs
-      const numBcbas = Math.random() > 0.7 ? 2 : 1;
-      const selectedBcbas = getRandomElements(activeBCBAs, numBcbas);
-      await patient.addAssignees(selectedBcbas);
+      // Assign BCBA - balance the load
+      const sortedBCBAs = activeBCBAs.sort((a, b) => 
+        (bcbaPatientCounts.get(a.id) || 0) - (bcbaPatientCounts.get(b.id) || 0)
+      );
+      const selectedBcba = sortedBCBAs[0];
+      await patient.addAssignees([selectedBcba]);
+      await patient.setPrimaryBCBA(selectedBcba);
+      bcbaPatientCounts.set(selectedBcba.id, (bcbaPatientCounts.get(selectedBcba.id) || 0) + 1);
       
-      // Set one BCBA as primary
-      const primaryBcba = selectedBcbas[0]; // First selected BCBA becomes primary
-      patient.primaryBcbaId = primaryBcba.id;
-      await patient.save();
+      // Assign therapists based on patient needs and therapist availability
+      const numTherapists = patient.requiredWeeklyHours > 25 ? 2 : 1;
+      const availableTherapists = therapistCategories
+        .filter(({ therapist, maxPatients }) => 
+          (therapistPatientCounts.get(therapist.id) || 0) < maxPatients
+        )
+        .map(({ therapist }) => therapist);
       
-      // Assign to 1-3 therapists
-      const numTherapists = Math.floor(Math.random() * 3) + 1;
-      const selectedTherapists = getRandomElements(activeTherapists, numTherapists);
-      await patient.addAssignees(selectedTherapists);
+      if (availableTherapists.length >= numTherapists) {
+        const selectedTherapists = getRandomElements(availableTherapists, numTherapists);
+        await patient.addAssignees(selectedTherapists);
+        selectedTherapists.forEach(t => {
+          therapistPatientCounts.set(t.id, (therapistPatientCounts.get(t.id) || 0) + 1);
+        });
+      } else {
+        // Fallback: use any therapist
+        const selectedTherapists = getRandomElements(activeTherapists, numTherapists);
+        await patient.addAssignees(selectedTherapists);
+      }
     }
     
     // Expiring organization (Hearts)
@@ -389,10 +374,10 @@ const seedDatabase = async () => {
       const selectedBcbas = getRandomElements(expiringBCBAs, numBcbas);
       await patient.addAssignees(selectedBcbas);
       
-      // Set one BCBA as primary
-      const primaryBcba = selectedBcbas[0]; // First selected BCBA becomes primary
-      patient.primaryBcbaId = primaryBcba.id;
-      await patient.save();
+      // Set the first BCBA as primary
+      if (selectedBcbas.length > 0) {
+        await patient.setPrimaryBCBA(selectedBcbas[0]);
+      }
       
       // Assign to 1-3 therapists
       const numTherapists = Math.floor(Math.random() * 3) + 1;
@@ -410,10 +395,10 @@ const seedDatabase = async () => {
       const selectedBcbas = getRandomElements(inactiveBCBAs, numBcbas);
       await patient.addAssignees(selectedBcbas);
       
-      // Set one BCBA as primary
-      const primaryBcba = selectedBcbas[0]; // First selected BCBA becomes primary
-      patient.primaryBcbaId = primaryBcba.id;
-      await patient.save();
+      // Set the first BCBA as primary
+      if (selectedBcbas.length > 0) {
+        await patient.setPrimaryBCBA(selectedBcbas[0]);
+      }
       
       // Assign to 1-3 therapists
       const numTherapists = Math.floor(Math.random() * 3) + 1;
@@ -423,188 +408,194 @@ const seedDatabase = async () => {
     
     console.log('Assigned patients to BCBAs and therapists for all organizations');
     
-    // Create teams for BCBAs
-    console.log('Creating teams for BCBAs...');
+    // Create teams for each organization
+    console.log('Creating teams...');
     
-    // Active organization (Sunshine) teams
-    for (const bcba of activeBCBAs) {
+    // Team colors for visual distinction
+    const TEAM_COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'];
+    
+    // Active organization teams (Sunshine)
+    for (let i = 0; i < activeBCBAs.length; i++) {
+      const bcba = activeBCBAs[i];
+      const teamColor = TEAM_COLORS[i % TEAM_COLORS.length];
+      
+      // Create team with BCBA's name
       const team = await db.Team.create({
-        name: `${bcba.firstName}'s Team`,
+        name: `Team ${bcba.firstName}`,
         leadBcbaId: bcba.id,
-        color: faker.helpers.arrayElement(['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'])
+        color: teamColor
       });
       
-      // Add therapists who share patients with this BCBA to the team
-      const bcbaPatients = await bcba.getPatients();
-      const therapistIds = new Set();
-      
-      for (const patient of bcbaPatients) {
-        const patientAssignees = await patient.getAssignees({
-          include: [{
-            model: db.Role,
-            where: { name: 'therapist' },
-            through: { attributes: [] }
-          }]
-        });
-        patientAssignees.forEach(therapist => therapistIds.add(therapist.id));
-      }
-      
-      // Add unique therapists to the team
-      const teamTherapists = activeTherapists.filter(t => therapistIds.has(t.id));
-      if (teamTherapists.length > 0) {
-        await team.addMembers(teamTherapists);
-      }
-    }
-    
-    // Expiring organization (Hearts) teams
-    for (const bcba of expiringBCBAs) {
-      const team = await db.Team.create({
-        name: `${bcba.firstName}'s Team`,
-        leadBcbaId: bcba.id,
-        color: faker.helpers.arrayElement(['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'])
-      });
-      
-      // Add therapists who share patients with this BCBA to the team
-      const bcbaPatients = await bcba.getPatients();
-      const therapistIds = new Set();
-      
-      for (const patient of bcbaPatients) {
-        const patientAssignees = await patient.getAssignees({
-          include: [{
-            model: db.Role,
-            where: { name: 'therapist' },
-            through: { attributes: [] }
-          }]
-        });
-        patientAssignees.forEach(therapist => therapistIds.add(therapist.id));
-      }
-      
-      // Add unique therapists to the team
-      const teamTherapists = expiringTherapists.filter(t => therapistIds.has(t.id));
-      if (teamTherapists.length > 0) {
-        await team.addMembers(teamTherapists);
-      }
-    }
-    
-    // Inactive organization (Coastal) teams
-    for (const bcba of inactiveBCBAs) {
-      const team = await db.Team.create({
-        name: `${bcba.firstName}'s Team`,
-        leadBcbaId: bcba.id,
-        color: faker.helpers.arrayElement(['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'])
-      });
-      
-      // Add therapists who share patients with this BCBA to the team
-      const bcbaPatients = await bcba.getPatients();
-      const therapistIds = new Set();
-      
-      for (const patient of bcbaPatients) {
-        const patientAssignees = await patient.getAssignees({
-          include: [{
-            model: db.Role,
-            where: { name: 'therapist' },
-            through: { attributes: [] }
-          }]
-        });
-        patientAssignees.forEach(therapist => therapistIds.add(therapist.id));
-      }
-      
-      // Add unique therapists to the team
-      const teamTherapists = inactiveTherapists.filter(t => therapistIds.has(t.id));
-      if (teamTherapists.length > 0) {
-        await team.addMembers(teamTherapists);
-      }
-    }
-    
-    console.log('Created teams for all BCBAs');
-    
-    // Create appointments for each organization
-    // Active organization (Sunshine)
-    let allAppointments = [];
-    for (const patient of orgPatients.active) {
-      try {
-        const patientAssignees = await patient.getAssignees({
-          include: [{
-            model: db.Role,
-            through: { attributes: [] }
-          }]
-        });
-        const patientTherapists = patientAssignees.filter(user => 
-          user.Roles?.some(role => role.name === 'therapist')
-        );
-        
-        if (patientTherapists.length === 0) {
-          console.log(`No therapists assigned to patient ${patient.firstName}`);
-          continue;
+      // Get therapists that work with this BCBA's patients
+      const bcbaPatients = [];
+      for (const patient of orgPatients.active) {
+        const assignees = await patient.getAssignees();
+        if (assignees.some(a => a.id === bcba.id)) {
+          bcbaPatients.push(patient);
         }
-        
-        const appointments = await Promise.all(
-          Array(APPOINTMENTS_PER_PATIENT).fill().map(() => 
-            createAppointment(patient, patientTherapists, orgLocations.active)
-          )
+      }
+      
+      // Find therapists assigned to these patients
+      const teamTherapists = new Set();
+      for (const patient of bcbaPatients) {
+        const assignees = await patient.getAssignees();
+        const therapists = assignees.filter(a => 
+          activeTherapists.some(t => t.id === a.id)
         );
-        allAppointments.push(...appointments);
-      } catch (error) {
-        console.error(`Error creating appointments for patient ${patient.firstName}:`, error);
+        therapists.forEach(t => teamTherapists.add(t));
+      }
+      
+      // Add therapists to team
+      for (const therapist of teamTherapists) {
+        await team.addMember(therapist);
+      }
+      
+      // Assign team to patients
+      for (const patient of bcbaPatients) {
+        patient.teamId = team.id;
+        await patient.save();
+      }
+      
+      console.log(`Created ${team.name} with ${teamTherapists.size} therapists and ${bcbaPatients.length} patients`);
+    }
+    
+    // Expiring organization teams (Hearts)
+    for (let i = 0; i < expiringBCBAs.length; i++) {
+      const bcba = expiringBCBAs[i];
+      const teamColor = TEAM_COLORS[(activeBCBAs.length + i) % TEAM_COLORS.length];
+      
+      const team = await db.Team.create({
+        name: `Team ${bcba.firstName}`,
+        leadBcbaId: bcba.id,
+        color: teamColor
+      });
+      
+      // Get therapists for this BCBA
+      const bcbaPatients = [];
+      for (const patient of orgPatients.expiring) {
+        const assignees = await patient.getAssignees();
+        if (assignees.some(a => a.id === bcba.id)) {
+          bcbaPatients.push(patient);
+        }
+      }
+      
+      const teamTherapists = new Set();
+      for (const patient of bcbaPatients) {
+        const assignees = await patient.getAssignees();
+        const therapists = assignees.filter(a => 
+          expiringTherapists.some(t => t.id === a.id)
+        );
+        therapists.forEach(t => teamTherapists.add(t));
+      }
+      
+      for (const therapist of teamTherapists) {
+        await team.addMember(therapist);
+      }
+      
+      // Assign team to patients
+      for (const patient of bcbaPatients) {
+        patient.teamId = team.id;
+        await patient.save();
+      }
+      
+      console.log(`Created ${team.name} with ${teamTherapists.size} therapists and ${bcbaPatients.length} patients`);
+    }
+    
+    console.log('Teams created successfully');
+    
+    // Create comprehensive appointment schedules
+    let allAppointments = [];
+    const therapistSchedules = new Map(); // Track daily schedules for lunch rules
+    
+    // Create appointments for multiple weeks
+    const today = new Date();
+    const startDate = subDays(today, 14); // Start 2 weeks ago
+    
+    console.log(`Creating appointments for ${WEEKS_TO_SCHEDULE} weeks starting from ${startDate.toDateString()}`);
+    
+    // Active organization (Sunshine)
+    for (const therapist of activeTherapists) {
+      // Get patients assigned to this therapist
+      const therapistPatients = [];
+      for (const patient of orgPatients.active) {
+        const assignees = await patient.getAssignees();
+        if (assignees.some(a => a.id === therapist.id)) {
+          therapistPatients.push(patient);
+        }
+      }
+      
+      if (therapistPatients.length === 0) continue;
+      
+      // Create appointments for multiple weeks
+      for (let week = 0; week < WEEKS_TO_SCHEDULE; week++) {
+        const weekStart = startOfWeek(addDays(startDate, week * 7), { weekStartsOn: 1 });
+        
+        // Create appointments for 5 weekdays
+        for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
+          const currentDay = addDays(weekStart, dayOffset);
+          
+          // Skip weekends
+          const dayOfWeek = currentDay.getDay();
+          if (dayOfWeek === 0 || dayOfWeek === 6) continue;
+          
+          // Sometimes skip a day (therapist not working)
+          if (Math.random() < 0.1) continue;
+          
+          const dailyAppointments = await createDailyScheduleForTherapist(
+            therapist,
+            therapistPatients,
+            orgLocations.active,
+            activeBCBAs,
+            currentDay,
+            therapistSchedules
+          );
+          allAppointments.push(...dailyAppointments);
+        }
       }
     }
     
-    // Expiring organization (Hearts)
-    for (const patient of orgPatients.expiring) {
-      try {
-        const patientAssignees = await patient.getAssignees({
-          include: [{
-            model: db.Role,
-            through: { attributes: [] }
-          }]
-        });
-        const patientTherapists = patientAssignees.filter(user => 
-          user.Roles?.some(role => role.name === 'therapist')
-        );
+    // Expiring organization (Hearts) - create appointments for 2 weeks only
+    for (const therapist of expiringTherapists) {
+      const therapistPatients = [];
+      for (const patient of orgPatients.expiring) {
+        const assignees = await patient.getAssignees();
+        if (assignees.some(a => a.id === therapist.id)) {
+          therapistPatients.push(patient);
+        }
+      }
+      
+      if (therapistPatients.length === 0) continue;
+      
+      // Create appointments for 2 weeks
+      for (let week = 0; week < 2; week++) {
+        const weekStart = startOfWeek(addDays(today, week * 7), { weekStartsOn: 1 });
         
-        if (patientTherapists.length === 0) continue;
-        
-        const appointments = await Promise.all(
-          Array(APPOINTMENTS_PER_PATIENT).fill().map(() => 
-            createAppointment(patient, patientTherapists, orgLocations.expiring)
-          )
-        );
-        allAppointments.push(...appointments);
-      } catch (error) {
-        console.error(`Error creating appointments for patient ${patient.firstName}:`, error);
+        for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
+          const currentDay = addDays(weekStart, dayOffset);
+          
+          // Skip weekends
+          const dayOfWeek = currentDay.getDay();
+          if (dayOfWeek === 0 || dayOfWeek === 6) continue;
+          
+          const dailyAppointments = await createDailyScheduleForTherapist(
+            therapist,
+            therapistPatients,
+            orgLocations.expiring,
+            expiringBCBAs,
+            currentDay,
+            therapistSchedules
+          );
+          allAppointments.push(...dailyAppointments);
+        }
       }
     }
     
-    // Inactive organization (Coastal)
-    for (const patient of orgPatients.inactive) {
-      try {
-        const patientAssignees = await patient.getAssignees({
-          include: [{
-            model: db.Role,
-            through: { attributes: [] }
-          }]
-        });
-        const patientTherapists = patientAssignees.filter(user => 
-          user.Roles?.some(role => role.name === 'therapist')
-        );
-        
-        if (patientTherapists.length === 0) continue;
-        
-        const appointments = await Promise.all(
-          Array(Math.floor(APPOINTMENTS_PER_PATIENT / 2)).fill().map(() => 
-            createAppointment(patient, patientTherapists, orgLocations.inactive)
-          )
-        );
-        allAppointments.push(...appointments);
-      } catch (error) {
-        console.error(`Error creating appointments for patient ${patient.firstName}:`, error);
-      }
-    }
+    // Parent training appointments removed as parentTraining is not a valid serviceType in the database
+    // To add parent training in the future, the appointment model enum needs to be updated
     
     console.log(`Created ${allAppointments.length} appointments across all organizations`);
     
     // Create notes for each organization
-    // Active organization (Sunshine)
     let allNotes = [];
     for (const patient of orgPatients.active) {
       try {
@@ -653,149 +644,10 @@ const seedDatabase = async () => {
       }
     }
     
-    // Inactive organization (Coastal)
-    for (const patient of orgPatients.inactive) {
-      try {
-        const patientAssignees = await patient.getAssignees({
-          include: [{
-            model: db.Role,
-            through: { attributes: [] }
-          }]
-        });
-        const notesCreators = patientAssignees;
-        
-        if (notesCreators.length === 0) continue;
-        
-        const notes = await Promise.all(
-          Array(Math.floor(NOTES_PER_PATIENT / 2)).fill().map(() => 
-            createNote(patient, notesCreators)
-          )
-        );
-        allNotes.push(...notes);
-      } catch (error) {
-        console.error(`Error creating notes for patient ${patient.firstName}:`, error);
-      }
-    }
-    
     console.log(`Created ${allNotes.length} clinical notes across all organizations`);
     
     // Create patient schedule templates and time blocks for the new scheduling system
     await createPatientScheduleData(orgPatients);
-    
-    // Create specific appointments for test users to ensure they have data to view
-    // Ensure test therapists have appointments today and this week
-    // Active organization (Sunshine)
-    await Promise.all([
-      // Today's appointment
-      createSpecificAppointment(
-        orgPatients.active[0], 
-        createdUsers.sunshineTherapist, 
-        orgLocations.active[0],
-        new Date(),
-        1  // 1 hour duration
-      ),
-      // Tomorrow's appointment
-      createSpecificAppointment(
-        orgPatients.active[1], 
-        createdUsers.sunshineTherapist, 
-        orgLocations.active[0],
-        addDays(new Date(), 1),
-        1.5  // 1.5 hours duration
-      ),
-      // Later this week
-      createSpecificAppointment(
-        orgPatients.active[2], 
-        createdUsers.sunshineTherapist, 
-        orgLocations.active[1],
-        addDays(new Date(), 3),
-        2  // 2 hours duration
-      )
-    ]);
-    
-    // Expiring organization (Hearts)
-    await Promise.all([
-      // Today's appointment
-      createSpecificAppointment(
-        orgPatients.expiring[0], 
-        createdUsers.heartsTherapist, 
-        orgLocations.expiring[0],
-        new Date(),
-        1  // 1 hour duration
-      ),
-      // Tomorrow's appointment
-      createSpecificAppointment(
-        orgPatients.expiring[1], 
-        createdUsers.heartsTherapist, 
-        orgLocations.expiring[0],
-        addDays(new Date(), 1),
-        1.5  // 1.5 hours duration
-      )
-    ]);
-    
-    // Inactive organization (Coastal)
-    await Promise.all([
-      // Today's appointment (but would be inaccessible due to inactive subscription)
-      createSpecificAppointment(
-        orgPatients.inactive[0], 
-        createdUsers.coastalTherapist, 
-        orgLocations.inactive[0],
-        new Date(),
-        1  // 1 hour duration
-      )
-    ]);
-    
-    // Ensure BCBAs can see appointments for therapists they supervise
-    // Active organization (Sunshine)
-    const sunshineBcbaPatients = orgPatients.active.slice(0, 5);
-    await createdUsers.sunshineBCBA.addPatients(sunshineBcbaPatients);
-    
-    // Expiring organization (Hearts)
-    const heartsBcbaPatients = orgPatients.expiring.slice(0, 3);
-    await createdUsers.heartsBCBA.addPatients(heartsBcbaPatients);
-    
-    // Inactive organization (Coastal)
-    const coastalBcbaPatients = orgPatients.inactive.slice(0, 2);
-    await createdUsers.coastalBCBA.addPatients(coastalBcbaPatients);
-    
-    // Add notes for test therapists
-    // Active organization (Sunshine)
-    await Promise.all(
-      sunshineBcbaPatients.map(patient => 
-        createSpecificNote(
-          patient,
-          createdUsers.sunshineTherapist,
-          'session',
-          faker.lorem.paragraph(5),
-          subDays(new Date(), Math.floor(Math.random() * 10))
-        )
-      )
-    );
-    
-    // Expiring organization (Hearts)
-    await Promise.all(
-      heartsBcbaPatients.map(patient => 
-        createSpecificNote(
-          patient,
-          createdUsers.heartsTherapist,
-          'session',
-          faker.lorem.paragraph(5),
-          subDays(new Date(), Math.floor(Math.random() * 10))
-        )
-      )
-    );
-    
-    // Inactive organization (Coastal)
-    await Promise.all(
-      coastalBcbaPatients.map(patient => 
-        createSpecificNote(
-          patient,
-          createdUsers.coastalTherapist,
-          'session',
-          faker.lorem.paragraph(5),
-          subDays(new Date(), Math.floor(Math.random() * 30)) // Older notes
-        )
-      )
-    );
     
     console.log('Database seeding completed successfully');
     console.log('\nTest account credentials:');
@@ -846,10 +698,10 @@ const seedDatabase = async () => {
 // Helper function to create a user with organization and role
 async function createUserWithOrg(userData, orgId, role) {
   const user = await db.User.create({
-    firstName: userData.firstName,
-    lastName: userData.lastName,
-    email: userData.email, // Ensure no mailto: prefix
-    password: userData.password, // Pass the plain text password
+    firstName: userData ? userData.firstName : faker.person.firstName(),
+    lastName: userData ? userData.lastName : faker.person.lastName(),
+    email: userData ? userData.email : faker.internet.email(), // Ensure no mailto: prefix
+    password: userData ? userData.password : 'Password123', // Pass the plain text password
     phone: faker.phone.number(),
     organizationId: orgId,
     active: true
@@ -859,39 +711,6 @@ async function createUserWithOrg(userData, orgId, role) {
   await user.addRole(role);
 
   return user;
-}
-
-// Helper function to create a random user
-async function createUser(userData = null, orgId = null) {
-  if (userData) {
-    // If user data is provided, use it (for test users)
-    return await db.User.create({
-      firstName: userData.firstName,
-      lastName: userData.lastName,
-      email: userData.email, // Ensure no mailto: prefix
-      password: userData.password, // Pass the plain text password
-      phone: faker.phone.number(),
-      organizationId: orgId,
-      active: true
-    });
-  }
-
-  // Otherwise create a random user
-  const firstName = faker.person.firstName();
-  const lastName = faker.person.lastName();
-  // Ensure no mailto: prefix by creating email directly
-  const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.com`.replace(/[^a-zA-Z0-9.@]/g, '');
-  const password = faker.internet.password({ length: 10 });
-
-  return await db.User.create({
-    firstName,
-    lastName,
-    email,
-    password: password, // Pass the plain text password
-    phone: faker.phone.number(),
-    organizationId: orgId,
-    active: true
-  });
 }
 
 // Helper function to create a random location
@@ -908,17 +727,41 @@ async function createLocation(orgId = null) {
   });
 }
 
-// Helper function to create a random patient
-async function createPatient(orgId = null) {
+// Helper function to create a random patient with comprehensive data
+async function createPatient(orgId = null, colorIndex = 0) {
   const firstName = faker.person.firstName();
   const lastName = faker.person.lastName();
-  const dateOfBirth = faker.date.birthdate({ min: 2, max: 18, mode: 'age' });
-  const insuranceProvider = faker.helpers.arrayElement([
-    'Blue Cross', 'Aetna', 'Cigna', 'UnitedHealthcare', 'Humana', 'Kaiser', 'Medicare', 'Medicaid'
-  ]);
+  
+  // Generate realistic birthdate for children/teens (2-18 years old)
+  const age = faker.number.int({ min: 2, max: 18 });
+  const dateOfBirth = new Date();
+  dateOfBirth.setFullYear(dateOfBirth.getFullYear() - age);
+  dateOfBirth.setMonth(faker.number.int({ min: 0, max: 11 }));
+  dateOfBirth.setDate(faker.number.int({ min: 1, max: 28 }));
+  
+  // Select insurance provider and generate comprehensive insurance info
+  const insuranceProvider = faker.helpers.arrayElement(INSURANCE_PROVIDERS);
+  const insuranceId = generateInsuranceId(insuranceProvider);
+  
+  // Generate realistic phone number
+  const phone = faker.phone.number('(###) ###-####');
+  
+  // Generate full address
+  const address = `${faker.location.streetAddress()}, ${faker.location.city()}, ${faker.location.state({ abbreviated: true })} ${faker.location.zipCode()}`;
+  
+  // Varied required weekly hours - some light, some full load
+  const loadTypes = [
+    { min: 10, max: 15 }, // Light load
+    { min: 20, max: 25 }, // Medium load
+    { min: 30, max: 40 }, // Full load
+  ];
+  const loadType = faker.helpers.arrayElement(loadTypes);
+  const requiredWeeklyHours = faker.number.int(loadType);
+  
+  // Assign color from palette (cycling through colors)
+  const color = PATIENT_COLORS[colorIndex % PATIENT_COLORS.length];
   
   // Generate approved hours data (quarterly approval)
-  const requiredWeeklyHours = faker.helpers.arrayElement([5, 10, 15, 20, 25, 30]);
   const approvedHours = requiredWeeklyHours * 13; // Quarterly (13 weeks)
   const approvedStartDate = subMonths(new Date(), 2); // Started 2 months ago
   const approvedEndDate = addMonths(approvedStartDate, 3); // 3 month period
@@ -929,142 +772,219 @@ async function createPatient(orgId = null) {
     lastName,
     dateOfBirth: dateOfBirth.toISOString(),
     insuranceProvider,
-    insuranceId: faker.finance.accountNumber(),
-    phone: faker.phone.number(),
-    address: faker.location.streetAddress() + ', ' + faker.location.city() + ', ' + faker.location.state() + ' ' + faker.location.zipCode(),
+    insuranceId,
+    phone,
+    address,
     requiredWeeklyHours,
+    color,
     approvedHours,
     approvedHoursStartDate: approvedStartDate,
     approvedHoursEndDate: approvedEndDate,
     usedHours,
-    status: faker.helpers.arrayElement(['active', 'active', 'active', 'inactive']),
+    status: faker.helpers.arrayElement(['active', 'active', 'active', 'active', 'inactive']), // 80% active
     organizationId: orgId
   });
 }
 
-// Helper function to create a random appointment
-async function createAppointment(patient, therapists, locations) {
-  const therapist = faker.helpers.arrayElement(therapists);
-  const location = faker.helpers.arrayElement(locations);
-  // Generate appointments for past week, this week, and next 2 weeks
-  const baseDate = faker.date.between({ 
-    from: subDays(new Date(), 7), 
-    to: addDays(new Date(), 14) 
-  });
-  
-  // Set reasonable working hours (8 AM to 5:30 PM, 30 mins before close)
-  const hour = faker.number.int({ min: 8, max: 17 });
-  const minute = faker.helpers.arrayElement([0, 15, 30, 45]);
-  const startDate = new Date(baseDate);
-  startDate.setHours(hour, minute, 0, 0);
-  
-  const durationHours = faker.helpers.arrayElement([1, 1.5, 2]);
-  const endDate = new Date(startDate.getTime() + durationHours * 60 * 60 * 1000);
-  
-  // Get BCBA from patient assignees or primary BCBA
-  let bcba;
-  if (patient.primaryBcbaId) {
-    bcba = await db.User.findByPk(patient.primaryBcbaId);
-  } else {
-    const patientAssignees = await patient.getAssignees({
-      include: [{
-        model: db.Role,
-        where: { name: 'bcba' },
-        through: { attributes: [] }
-      }]
-    });
-    
-    if (patientAssignees && patientAssignees.length > 0) {
-      bcba = faker.helpers.arrayElement(patientAssignees);
-    } else {
-      // If no BCBA assigned, find a random BCBA from the same organization
-      const bcbaRole = await db.Role.findOne({ where: { name: 'bcba' } });
-      const organizationBcbas = await db.User.findAll({
-        include: [{
-          model: db.Role,
-          where: { id: bcbaRole.id },
-          through: { attributes: [] }
-        }],
-        where: { organizationId: patient.organizationId }
-      });
-      
-      if (organizationBcbas.length > 0) {
-        bcba = faker.helpers.arrayElement(organizationBcbas);
-      }
-    }
+// Helper function to generate realistic insurance IDs
+function generateInsuranceId(provider) {
+  switch (provider.toLowerCase()) {
+    case 'medicare':
+      return `${faker.number.int({ min: 100000000, max: 999999999 })}-${faker.string.alpha({ length: 2 }).toUpperCase()}`;
+    case 'medicaid':
+      return faker.number.int({ min: 10000000000, max: 99999999999 }).toString();
+    case 'tricare':
+      return `${faker.number.int({ min: 1000000000, max: 9999999999 })}`;
+    default:
+      return `${faker.string.alphanumeric({ length: 3 }).toUpperCase()}${faker.number.int({ min: 100000000, max: 999999999 })}`;
   }
-  
-  if (!bcba) {
-    throw new Error('No BCBA found for patient appointment');
-  }
-  
-  return await db.Appointment.create({
-    startTime: startDate,
-    endTime: endDate,
-    title: faker.helpers.arrayElement(['Therapy Session', 'Assessment', 'Parent Meeting', 'Skills Training']),
-    status: faker.helpers.arrayElement(['scheduled', 'scheduled', 'scheduled', 'completed', 'cancelled']),
-    notes: Math.random() > 0.5 ? faker.lorem.sentence() : null,
-    recurring: Math.random() > 0.8,
-    recurringPattern: Math.random() > 0.8 ? { frequency: 'weekly', day: startDate.getDay() } : null,
-    excludeWeekends: Math.random() > 0.2, // 80% chance to exclude weekends
-    excludeHolidays: Math.random() > 0.2, // 80% chance to exclude holidays
-    therapistId: therapist.id,
-    bcbaId: bcba.id,
-    patientId: patient.id,
-    locationId: location.id
-  });
 }
 
-// Helper function to create a specific appointment for testing
-async function createSpecificAppointment(patient, therapist, location, baseDate, durationHours) {
-  // Set to a reasonable hour (9am-5pm) with 15-minute intervals
-  const hour = faker.number.int({ min: 9, max: 16 });
-  const minute = faker.helpers.arrayElement([0, 15, 30, 45]);
-  const startDate = new Date(baseDate);
-  startDate.setHours(hour, minute, 0, 0);
+// Helper function to create a daily schedule for a therapist
+async function createDailyScheduleForTherapist(therapist, patients, locations, bcbas, date, therapistSchedules) {
+  const appointments = [];
+  const dayKey = `${therapist.id}-${date.toISOString().split('T')[0]}`;
   
-  const endDate = new Date(startDate);
-  endDate.setHours(startDate.getHours() + Math.floor(durationHours));
-  endDate.setMinutes(startDate.getMinutes() + ((durationHours % 1) * 60));
+  // Track hours for this day
+  let dailyDirectHours = 0;
+  let totalDailyHours = 0;
+  const dailyAppointments = [];
   
-  // Get a BCBA (either the primary BCBA or a random assigned BCBA)
-  let bcba;
-  if (patient.primaryBcbaId) {
-    bcba = await db.User.findByPk(patient.primaryBcbaId);
-  } else {
-    const bcbaRole = await db.Role.findOne({ where: { name: 'bcba' } });
-    const bcbas = await db.User.findAll({
-      include: [
-        {
-          model: db.Role,
-          where: { id: bcbaRole.id },
-          through: { attributes: [] }
-        }
-      ],
-      where: { organizationId: patient.organizationId }
-    });
+  // Vary start times between 7:30 AM and 9 AM
+  const startHour = faker.helpers.arrayElement([7.5, 8, 8.5, 9]);
+  let currentTime = setMinutes(setHours(date, Math.floor(startHour)), (startHour % 1) * 60);
+  
+  // End time varies between 4 PM and 6 PM
+  const endHour = faker.helpers.arrayElement([16, 17, 18]);
+  const endOfDay = setHours(date, endHour);
+  
+  // Shuffle patients for variety
+  const shuffledPatients = [...patients].sort(() => 0.5 - Math.random());
+  let patientIndex = 0;
+  
+  while (currentTime < endOfDay && totalDailyHours < 8) {
+    // Determine next appointment type
+    let appointmentType = 'direct';
+    let duration = 2; // Default 2 hours for direct
+    let needsPatient = true;
     
-    if (bcbas.length > 0) {
-      bcba = bcbas[0];  // Use the first BCBA for consistency
+    // Check if we need a lunch break (after 6 hours of direct service, no lunch yet today)
+    const hasLunchToday = dailyAppointments.some(app => app.serviceType === 'lunch');
+    if (dailyDirectHours >= 6 && !hasLunchToday) {
+      appointmentType = 'lunch';
+      duration = 0.5;
+      needsPatient = false;
     } else {
-      throw new Error('No BCBA found for test appointment');
+      // Random selection based on weights
+      const rand = Math.random();
+      if (rand < 0.85) {
+        // 85% direct service
+        appointmentType = 'direct';
+        duration = faker.helpers.arrayElement([1.5, 2, 2.5]);
+        needsPatient = true;
+      } else if (rand < 0.90) {
+        // 5% indirect work
+        appointmentType = 'indirect';
+        duration = 1;
+        needsPatient = false;
+      } else if (rand < 0.93) {
+        // 3% circle time
+        appointmentType = 'circle';
+        duration = 1;
+        needsPatient = true;
+      } else if (rand < 0.96) {
+        // 3% supervision
+        appointmentType = 'supervision';
+        duration = 1;
+        needsPatient = false;
+      } else {
+        // 2% cleaning
+        appointmentType = 'cleaning';
+        duration = 0.5;
+        needsPatient = false;
+      }
+    }
+    
+    // Check if we have enough time left in the day
+    const endTime = addDays(currentTime, duration / 24); // Convert hours to days fraction
+    if (endTime > endOfDay) break;
+    
+    // Create appointment
+    const location = faker.helpers.arrayElement(locations);
+    const patient = needsPatient && shuffledPatients.length > 0 ? shuffledPatients[patientIndex % shuffledPatients.length] : null;
+    const bcba = patient ? (await patient.getPrimaryBCBA() || faker.helpers.arrayElement(bcbas)) : faker.helpers.arrayElement(bcbas);
+    
+    const appointment = await createAppointmentWithDetails(
+      patient,
+      therapist,
+      bcba,
+      location,
+      currentTime,
+      duration,
+      appointmentType
+    );
+    
+    appointments.push(appointment);
+    dailyAppointments.push(appointment);
+    
+    // Update counters
+    if (appointmentType === 'direct') {
+      dailyDirectHours += duration;
+    }
+    totalDailyHours += duration;
+    
+    // Move to next time slot
+    currentTime = new Date(currentTime.getTime() + duration * 60 * 60 * 1000);
+    
+    // Add a 15-minute break between appointments sometimes
+    if (Math.random() > 0.7 && totalDailyHours < 7) {
+      currentTime = new Date(currentTime.getTime() + 15 * 60 * 1000);
+    }
+    
+    // Move to next patient for variety
+    if (needsPatient) {
+      patientIndex++;
     }
   }
   
-  return await db.Appointment.create({
-    startTime: startDate,
-    endTime: endDate,
-    title: faker.helpers.arrayElement(['Therapy Session', 'Assessment', 'Parent Meeting', 'Skills Training']),
-    status: 'scheduled',
-    notes: faker.lorem.sentence(),
+  // Store the schedule for tracking
+  therapistSchedules.set(dayKey, {
+    directHours: dailyDirectHours,
+    totalHours: totalDailyHours,
+    appointments: dailyAppointments
+  });
+  
+  return appointments;
+}
+
+// Note: Parent training appointments have been removed since 'parentTraining' 
+// is not a valid serviceType in the current database schema.
+// To add parent training functionality:
+// 1. Update the Appointment model to include 'parentTraining' in the serviceType enum
+// 2. Run a migration to update the database
+// 3. Uncomment and use this function or create parent training as 'supervision' type
+
+// Helper function to create appointment with specific details
+async function createAppointmentWithDetails(patient, therapist, bcba, location, startTime, durationHours, serviceType) {
+  const endTime = new Date(startTime.getTime() + durationHours * 60 * 60 * 1000);
+  
+  // Occasionally mark some appointments as cancelled or completed
+  let status = 'scheduled';
+  const now = new Date();
+  
+  if (startTime < now) {
+    // Past appointments
+    const rand = Math.random();
+    if (rand < 0.75) {
+      status = 'completed'; // 75% of past appointments are completed
+    } else if (rand < 0.90) {
+      status = 'cancelled'; // 15% are cancelled
+    } else if (rand < 0.95) {
+      status = 'no-show'; // 5% are no-shows
+    }
+    // 5% remain scheduled (missed updating)
+  } else {
+    // Future appointments
+    if (Math.random() < 0.05) {
+      status = 'cancelled'; // 5% of future appointments are pre-cancelled
+    }
+  }
+  
+  // Generate appropriate title based on service type
+  const titles = {
+    direct: ['Direct Therapy', 'ABA Session', 'Skills Training', 'Behavior Intervention'],
+    indirect: ['Documentation', 'Prep Work', 'Program Planning', 'Data Review'],
+    supervision: ['Supervision Meeting', 'Case Review', 'Training Session'],
+    lunch: ['Lunch Break'],
+    circle: ['Circle Time', 'Group Activity', 'Social Skills Group'],
+    cleaning: ['Room Cleaning', 'Equipment Sanitization']
+  };
+  
+  const title = faker.helpers.arrayElement(titles[serviceType] || titles.direct);
+  
+  // Build appointment data
+  const appointmentData = {
+    startTime,
+    endTime,
+    title,
+    serviceType: serviceType || 'direct',
+    status,
+    notes: Math.random() > 0.6 ? faker.lorem.sentence() : null,
     recurring: false,
     excludeWeekends: true,
     excludeHolidays: true,
     therapistId: therapist.id,
     bcbaId: bcba.id,
-    patientId: patient.id,
     locationId: location.id
-  });
+  };
+  
+  // CRITICAL: Only add patientId if the service type requires a patient
+  if (patient && APPOINTMENT_TYPE_DISTRIBUTION[serviceType]?.requiresPatient === true) {
+    appointmentData.patientId = patient.id;
+  }
+  // For service types that don't require a patient, patientId is NOT included
+  
+  return await db.Appointment.create(appointmentData);
 }
 
 // Helper function to create a random note
@@ -1163,108 +1083,56 @@ async function createPatientScheduleData(orgPatients) {
         },
         sundaySchedule: {
           enabled: false
-        },
-        
-        isActive: true,
-        createdBy: patient.primaryBcbaId || null
+        }
       });
       
-      // Create some time blocks for this week and next week
-      const today = new Date();
-      const daysToCreate = 10; // Create for next 10 days
+      console.log(`Created schedule template for ${patient.firstName} ${patient.lastName}`);
       
-      for (let dayOffset = 0; dayOffset < daysToCreate; dayOffset++) {
-        const targetDate = new Date(today);
-        targetDate.setDate(today.getDate() + dayOffset);
+      // Create time blocks for next 4 weeks
+      const today = new Date();
+      for (let weekOffset = 0; weekOffset < 4; weekOffset++) {
+        const weekStart = addDays(today, weekOffset * 7);
         
-        // Skip weekends based on template
-        const dayOfWeek = targetDate.getDay();
-        if (dayOfWeek === 0 || dayOfWeek === 6) continue;
+        // Create 3-5 time blocks per week
+        const numBlocks = faker.number.int({ min: 3, max: 5 });
         
-        // Get schedule for this day
-        let daySchedule = null;
-        switch (dayOfWeek) {
-          case 1: daySchedule = template.mondaySchedule; break;
-          case 2: daySchedule = template.tuesdaySchedule; break;
-          case 3: daySchedule = template.wednesdaySchedule; break;
-          case 4: daySchedule = template.thursdaySchedule; break;
-          case 5: daySchedule = template.fridaySchedule; break;
-        }
-        
-        if (!daySchedule || !daySchedule.enabled) continue;
-        
-        // Create a time block for this day
-        const timeBlock = await db.PatientTimeBlock.create({
-          templateId: template.id,
-          patientId: patient.id,
-          date: targetDate,
-          startTime: daySchedule.startTime,
-          endTime: daySchedule.endTime,
-          serviceType: template.serviceType,
-          priority: faker.helpers.arrayElement(priorities),
-          requiredStaffCount: 1,
-          status: 'scheduled',
-          notes: Math.random() > 0.7 ? faker.lorem.sentence() : null
-        });
-        
-        // Randomly assign therapists to some time blocks (70% chance)
-        if (Math.random() > 0.3) {
-          const patientAssignees = await patient.getAssignees({
-            include: [{
-              model: db.Role,
-              where: { name: 'therapist' },
-              through: { attributes: [] }
-            }]
-          });
+        for (let i = 0; i < numBlocks; i++) {
+          const blockDate = addDays(weekStart, faker.number.int({ min: 0, max: 4 })); // Mon-Fri
+          const blockHour = faker.number.int({ min: 8, max: 16 });
+          const startTime = new Date(blockDate);
+          startTime.setHours(blockHour, 0, 0, 0);
           
-          if (patientAssignees && patientAssignees.length > 0) {
-            const therapist = faker.helpers.arrayElement(patientAssignees);
-            
-            // Create assignment for full time block or partial
-            const isPartialAssignment = Math.random() > 0.7;
-            let assignmentStart = daySchedule.startTime;
-            let assignmentEnd = daySchedule.endTime;
-            
-            if (isPartialAssignment) {
-              // Create a 1-2 hour assignment within the time block
-              const startHour = parseInt(daySchedule.startTime.split(':')[0]);
-              const endHour = parseInt(daySchedule.endTime.split(':')[0]);
-              const duration = Math.min(2, endHour - startHour);
-              
-              if (duration > 0) {
-                assignmentStart = `${startHour}:${daySchedule.startTime.split(':')[1]}`;
-                assignmentEnd = `${startHour + duration}:${daySchedule.startTime.split(':')[1]}`;
-              }
-            }
-            
-            await db.TherapistAssignment.create({
-              timeBlockId: timeBlock.id,
-              therapistId: therapist.id,
-              patientId: patient.id,
-              startTime: assignmentStart,
-              endTime: assignmentEnd,
-              serviceType: template.serviceType,
-              status: faker.helpers.arrayElement(['confirmed', 'pending', 'completed']),
-              notes: Math.random() > 0.8 ? faker.lorem.sentence() : null,
-              assignedBy: patient.primaryBcbaId || null,
-              assignedAt: new Date()
-            });
-          }
+          const duration = faker.helpers.arrayElement([60, 90, 120]); // 1-2 hours
+          const endTime = new Date(startTime.getTime() + duration * 60 * 1000);
+          
+          await db.PatientTimeBlock.create({
+            patientId: patient.id,
+            scheduleTemplateId: template.id,
+            blockDate: blockDate.toISOString().split('T')[0], // DATEONLY format
+            startTime: `${String(blockHour).padStart(2, '0')}:00`, // HH:MM format
+            endTime: `${String(blockHour + Math.floor(duration / 60)).padStart(2, '0')}:${String(duration % 60).padStart(2, '0')}`, // HH:MM format
+            durationMinutes: duration,
+            priority: faker.helpers.arrayElement(priorities),
+            isRecurring: Math.random() > 0.6,
+            recurringPattern: Math.random() > 0.6 ? { frequency: 'weekly', interval: 1 } : null,
+            locationId: faker.helpers.arrayElement(patientLocations).id,
+            createdById: patient.primaryBcbaId || 1
+          });
         }
       }
+      
+      console.log(`Created time blocks for ${patient.firstName} ${patient.lastName}`);
       
     } catch (error) {
       console.error(`Error creating schedule data for patient ${patient.firstName}:`, error);
     }
   }
   
-  console.log('Created patient schedule templates and time blocks for all patients');
+  console.log('Patient schedule data creation completed');
 }
 
-// Export the seeder
+// Run the seeding function
+seedDatabase();
+
+// Export for use in other scripts
 module.exports = seedDatabase;
-
-// Run if this file is executed directly
-if (require.main === module) {
-  seedDatabase();
-}

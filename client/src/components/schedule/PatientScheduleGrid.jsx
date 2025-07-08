@@ -22,6 +22,7 @@ import {
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { analyzeTherapistContinuity, calculateContinuityScore } from '../../utils/continuity-tracker';
+import { getAppointmentType, getAppointmentColors } from '../../utils/appointmentTypes';
 
 // Time slots matching the Excel format
 const TIME_SLOTS = [
@@ -53,6 +54,28 @@ export default function PatientScheduleGrid({
   showOnlyUncovered = false,
   viewMode = 'grid' // 'grid' or 'columns'
 }) {
+  // Debug data received by component - ALWAYS LOG THIS
+  console.log('========================');
+  console.log('📋 PATIENT SCHEDULE DEBUG');
+  console.log('========================');
+  console.log('Patients:', patients.length);
+  console.log('Appointments:', appointments.length);
+  console.log('Selected Date:', selectedDate.toISOString().split('T')[0]);
+  
+  console.log('\n📝 ALL APPOINTMENTS:');
+  appointments.forEach((app, index) => {
+    console.log(`${index + 1}. ID: ${app.id}`);
+    console.log(`   - patientId: ${app.patientId}`);
+    console.log(`   - serviceType: "${app.serviceType}"`);
+    console.log(`   - startTime: ${app.startTime}`);
+    console.log(`   - status: ${app.status}`);
+  });
+  
+  console.log('\n👥 ALL PATIENTS:');
+  patients.forEach((patient, index) => {
+    console.log(`${index + 1}. ID: ${patient.id} - Name: ${patient.firstName} ${patient.lastName}`);
+  });
+  console.log('========================');
   const [expandedPatients, setExpandedPatients] = useState({});
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [draggedTherapist, setDraggedTherapist] = useState(null);
@@ -87,11 +110,52 @@ export default function PatientScheduleGrid({
     return `${therapist.firstName?.charAt(0) || ''}${therapist.lastName?.charAt(0) || ''}`;
   };
 
+  // Detect gaps in patient schedule
+  const detectScheduleGaps = (appointments) => {
+    if (appointments.length < 2) return [];
+    
+    const gaps = [];
+    const sortedApps = [...appointments].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+    
+    for (let i = 0; i < sortedApps.length - 1; i++) {
+      const currentEnd = new Date(sortedApps[i].endTime);
+      const nextStart = new Date(sortedApps[i + 1].startTime);
+      const gapMinutes = (nextStart - currentEnd) / (1000 * 60);
+      
+      // Flag gaps longer than 30 minutes during therapy hours
+      if (gapMinutes > 30 && gapMinutes < 180) { // 30 min to 3 hours
+        gaps.push({
+          startTime: currentEnd,
+          endTime: nextStart,
+          duration: gapMinutes,
+          type: 'schedule_gap'
+        });
+      }
+    }
+    
+    return gaps;
+  };
+
   // Get appointments for selected date
   const todaysAppointments = useMemo(() => {
-    return appointments.filter(app => 
+    const filtered = appointments.filter(app => 
       app && app.startTime && isSameDay(new Date(app.startTime), new Date(selectedDate))
     );
+    console.log('🗓️ PatientScheduleGrid appointments filtered:', {
+      totalAppointments: appointments.length,
+      todaysAppointments: filtered.length,
+      selectedDate: selectedDate.toISOString().split('T')[0],
+      appointments: filtered.map(app => ({
+        id: app.id,
+        startTime: app.startTime,
+        patientId: app.patientId,
+        patient: app.patient?.firstName + ' ' + app.patient?.lastName,
+        therapist: app.therapist?.firstName + ' ' + app.therapist?.lastName,
+        serviceType: app.serviceType,
+        status: app.status
+      }))
+    });
+    return filtered;
   }, [appointments, selectedDate]);
 
   // Group appointments by patient and analyze coverage
@@ -113,17 +177,48 @@ export default function PatientScheduleGrid({
     });
     
     // Add appointments to patient schedules
-    todaysAppointments
-      .filter(app => app.patientId && app.serviceType === 'direct')
-      .forEach(appointment => {
-        if (scheduleData[appointment.patientId]) {
-          scheduleData[appointment.patientId].appointments.push(appointment);
-          
-          if (appointment.therapistId) {
-            scheduleData[appointment.patientId].therapistCount.add(appointment.therapistId);
-          }
+    const directAppointments = todaysAppointments.filter(app => app.patientId && app.serviceType === 'direct');
+    console.log('🎯 Direct appointments for patients:', {
+      totalTodaysAppointments: todaysAppointments.length,
+      directAppointments: directAppointments.length,
+      serviceTypes: todaysAppointments.map(app => ({ id: app.id, serviceType: app.serviceType, patientId: app.patientId })),
+      filteredOut: todaysAppointments.filter(app => !(app.patientId && app.serviceType === 'direct')).map(app => ({
+        id: app.id,
+        patientId: app.patientId,
+        serviceType: app.serviceType,
+        reason: !app.patientId ? 'No patientId' : app.serviceType !== 'direct' ? `serviceType is '${app.serviceType}' not 'direct'` : 'unknown'
+      })),
+      appointments: directAppointments.map(app => ({
+        id: app.id,
+        patientId: app.patientId,
+        serviceType: app.serviceType,
+        startTime: app.startTime
+      }))
+    });
+    
+    console.log('🔗 Processing direct appointments into patient schedules...');
+    directAppointments.forEach(appointment => {
+      console.log(`📝 Processing appointment ${appointment.id} for patient ${appointment.patientId}`);
+      if (scheduleData[appointment.patientId]) {
+        scheduleData[appointment.patientId].appointments.push(appointment);
+        
+        if (appointment.therapistId) {
+          scheduleData[appointment.patientId].therapistCount.add(appointment.therapistId);
         }
-      });
+        
+        console.log(`✅ Added appointment to patient ${appointment.patientId} schedule. Total appointments: ${scheduleData[appointment.patientId].appointments.length}`);
+      } else {
+        console.warn(`⚠️ Patient ${appointment.patientId} not found in scheduleData keys:`, Object.keys(scheduleData));
+      }
+    });
+    
+    console.log('📊 Final patientScheduleData summary:', 
+      Object.entries(scheduleData).map(([patientId, data]) => ({
+        patientId,
+        patientName: `${data.patient.firstName} ${data.patient.lastName}`,
+        appointmentsCount: data.appointments.length
+      }))
+    );
     
     // Analyze each patient's schedule
     Object.values(scheduleData).forEach(data => {
@@ -176,32 +271,6 @@ export default function PatientScheduleGrid({
     
     return scheduleData;
   }, [todaysAppointments, patients]);
-
-  // Detect gaps in patient schedule
-  const detectScheduleGaps = (appointments) => {
-    if (appointments.length < 2) return [];
-    
-    const gaps = [];
-    const sortedApps = [...appointments].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-    
-    for (let i = 0; i < sortedApps.length - 1; i++) {
-      const currentEnd = new Date(sortedApps[i].endTime);
-      const nextStart = new Date(sortedApps[i + 1].startTime);
-      const gapMinutes = (nextStart - currentEnd) / (1000 * 60);
-      
-      // Flag gaps longer than 30 minutes during therapy hours
-      if (gapMinutes > 30 && gapMinutes < 180) { // 30 min to 3 hours
-        gaps.push({
-          startTime: currentEnd,
-          endTime: nextStart,
-          duration: gapMinutes,
-          type: 'schedule_gap'
-        });
-      }
-    }
-    
-    return gaps;
-  };
 
   // Check if appointment is in time slot
   const isAppointmentInTimeSlot = (appointment, timeSlot) => {
@@ -832,10 +901,11 @@ export default function PatientScheduleGrid({
                     style={{
                       transitionDelay: isReordering ? `${index * 80}ms` : '0ms',
                       width: `${dimensions.cardWidth}px`,
-                      minWidth: `${dimensions.cardMinWidth}px`
+                      minWidth: `${dimensions.cardMinWidth}px`,
+                      borderColor: patient.color || '#6B7280'
                     }}
                     className={cn(
-                      "flex-shrink-0 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm h-full flex flex-col transition-all duration-500 ease-in-out",
+                      "flex-shrink-0 bg-white dark:bg-gray-800 rounded-lg border-2 shadow-sm h-full flex flex-col transition-all duration-500 ease-in-out",
                       isDragTarget && "transform scale-110 shadow-2xl border-blue-500 dark:border-blue-400 ring-4 ring-blue-300 dark:ring-blue-600 bg-blue-50 dark:bg-blue-900/20",
                       isBeingDragged && "opacity-30 shadow-2xl z-50 transform scale-95",
                       isAnimating && !isSuccessFlash && "transform translateX(20px) scale(105)",
@@ -878,10 +948,11 @@ export default function PatientScheduleGrid({
                               isBeingDragged ? "text-blue-600 dark:text-blue-400" : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                             )} />
                           </div>
-                          <div className={cn(
-                            "w-3 h-3 rounded-full border-2",
-                            COVERAGE_COLORS[data.coverageStatus]
-                          )}></div>
+                          <div 
+                            className="w-3 h-3 rounded-full border-2 border-gray-300"
+                            style={{ backgroundColor: patient.color || '#6B7280' }}
+                            title="Patient color"
+                          ></div>
                           <div>
                             <h3 
                               className={cn(
@@ -1081,7 +1152,8 @@ export default function PatientScheduleGrid({
           return (
             <div 
               key={patient.id}
-              className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden shadow-sm"
+              className="bg-white dark:bg-gray-800 rounded-lg border-2 overflow-hidden shadow-sm"
+              style={{ borderColor: patient.color || '#6B7280' }}
             >
               {/* Patient Header */}
               <div 
@@ -1095,10 +1167,11 @@ export default function PatientScheduleGrid({
               >
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-3">
-                    <div className={cn(
-                      "w-3 h-3 rounded-full border-2",
-                      COVERAGE_COLORS[data.coverageStatus]
-                    )}></div>
+                    <div 
+                      className="w-3 h-3 rounded-full border-2 border-gray-300"
+                      style={{ backgroundColor: patient.color || '#6B7280' }}
+                      title="Patient color"
+                    ></div>
                     
                     <div>
                       <h3 className="text-lg font-bold text-gray-900 dark:text-white">

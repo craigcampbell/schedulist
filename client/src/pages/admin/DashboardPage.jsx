@@ -8,7 +8,8 @@ import {
   Activity,
   Clock,
   User,
-  AlertCircle
+  AlertCircle,
+  FileText
 } from 'lucide-react';
 import { getAdminDashboardSummary } from '../../api/admin';
 import { Button } from '../../components/ui/button';
@@ -146,9 +147,9 @@ export default function AdminDashboardPage() {
           />
           
           <ActionCard
-            title="Generate Reports"
-            icon={<Activity className="h-5 w-5" />}
-            link="/admin/reports"
+            title="Audit Logs"
+            icon={<FileText className="h-5 w-5" />}
+            link="/admin/audit-logs"
           />
           
           <ActionCard

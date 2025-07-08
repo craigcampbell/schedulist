@@ -24,12 +24,15 @@ import BCBASchedulePage from './pages/bcba/SchedulePage';
 import BCBAPatientsPage from './pages/bcba/PatientsPage';
 import BCBAPatientDetailsPage from './pages/bcba/PatientDetailsPage';
 import BCBATherapistsPage from './pages/bcba/TherapistsPage';
+import BCBATeamsPage from './pages/bcba/TeamsPage';
 
 // Admin Pages
 import AdminDashboardPage from './pages/admin/DashboardPage';
 import AdminUsersPage from './pages/admin/UsersPage';
 import AdminUserDetailsPage from './pages/admin/UserDetailsPage';
 import AdminLocationsPage from './pages/admin/LocationsPage';
+import AdminTeamsPage from './pages/admin/TeamsPage';
+import AdminAuditLogsPage from './pages/admin/AuditLogsPage';
 import SubscriptionPage from './pages/admin/SubscriptionPage';
 
 // Common Pages
@@ -149,6 +152,11 @@ function AppRoutes() {
             <BCBATherapistsPage />
           </ProtectedRoute>
         } />
+        <Route path="/bcba/teams" element={
+          <ProtectedRoute requiredRoles={['bcba']}>
+            <BCBATeamsPage />
+          </ProtectedRoute>
+        } />
         
         <Route path="/admin/dashboard" element={
           <ProtectedRoute requiredRoles={['admin']} requireSubscription={false}>
@@ -168,6 +176,16 @@ function AppRoutes() {
         <Route path="/admin/locations" element={
           <ProtectedRoute requiredRoles={['admin']} requireSubscription={false}>
             <AdminLocationsPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/teams" element={
+          <ProtectedRoute requiredRoles={['admin']} requireSubscription={false}>
+            <AdminTeamsPage />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin/audit-logs" element={
+          <ProtectedRoute requiredRoles={['admin']} requireSubscription={false}>
+            <AdminAuditLogsPage />
           </ProtectedRoute>
         } />
         <Route path="/admin/subscription" element={

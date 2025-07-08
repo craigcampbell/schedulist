@@ -1,4 +1,4 @@
-const { Patient, User, Appointment, Note } = require('../models');
+const { Patient, User, Appointment, Note, Team } = require('../models');
 const { Op } = require('sequelize');
 
 /**
@@ -33,6 +33,13 @@ const getAllPatients = async (req, res) => {
       });
     }
     
+    // Add Team to include
+    include.push({
+      model: Team,
+      as: 'Team',
+      attributes: ['id', 'name', 'color']
+    });
+    
     // Get patients
     const patients = await Patient.findAll({
       where,
@@ -48,7 +55,14 @@ const getAllPatients = async (req, res) => {
       dateOfBirth: patient.dateOfBirth,
       insuranceProvider: patient.insuranceProvider,
       requiredWeeklyHours: patient.requiredWeeklyHours,
+      teamId: patient.teamId,
+      team: patient.Team ? {
+        id: patient.Team.id,
+        name: patient.Team.name,
+        color: patient.Team.color
+      } : null,
       status: patient.status,
+      color: patient.color,
       createdAt: patient.createdAt,
       updatedAt: patient.updatedAt
     }));
@@ -74,6 +88,11 @@ const getPatientById = async (req, res) => {
           as: 'Assignees',
           through: { attributes: [] },
           attributes: ['id', 'firstName', 'lastName', 'email']
+        },
+        {
+          model: Team,
+          as: 'Team',
+          attributes: ['id', 'name', 'color']
         },
         {
           model: Appointment,
@@ -125,6 +144,7 @@ const getPatientById = async (req, res) => {
       address: patient.address,
       requiredWeeklyHours: patient.requiredWeeklyHours,
       status: patient.status,
+      color: patient.color,
       assignees: patient.Assignees,
       upcomingAppointments: patient.Appointments.map(appt => ({
         id: appt.id,
@@ -166,6 +186,7 @@ const createPatient = async (req, res) => {
       phone,
       address,
       requiredWeeklyHours,
+      color,
       assigneeIds
     } = req.body;
     
@@ -179,6 +200,7 @@ const createPatient = async (req, res) => {
       phone,
       address,
       requiredWeeklyHours,
+      color,
       status: 'active'
     });
     
@@ -197,7 +219,8 @@ const createPatient = async (req, res) => {
         id: patient.id,
         firstName: patient.firstName,
         lastName: patient.lastName,
-        status: patient.status
+        status: patient.status,
+        color: patient.color
       }
     });
     
@@ -222,8 +245,12 @@ const updatePatient = async (req, res) => {
       address,
       requiredWeeklyHours,
       status,
+      color,
+      teamId,
       assigneeIds
     } = req.body;
+    
+    console.log('Updating patient:', id, 'with data:', req.body);
     
     const patient = await Patient.findByPk(id);
     
@@ -231,18 +258,30 @@ const updatePatient = async (req, res) => {
       return res.status(404).json({ message: 'Patient not found' });
     }
     
-    // Update fields (virtual setters will handle encryption)
-    if (firstName) patient.firstName = firstName;
-    if (lastName) patient.lastName = lastName;
-    if (dateOfBirth) patient.dateOfBirth = dateOfBirth;
-    if (insuranceProvider) patient.insuranceProvider = insuranceProvider;
-    if (insuranceId) patient.insuranceId = insuranceId;
-    if (phone) patient.phone = phone;
-    if (address) patient.address = address;
-    if (requiredWeeklyHours) patient.requiredWeeklyHours = requiredWeeklyHours;
-    if (status) patient.status = status;
+    // Ensure the patient belongs to the user's organization
+    if (patient.organizationId !== req.user.organizationId) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
     
-    await patient.save();
+    // Update fields (virtual setters will handle encryption)
+    if (firstName !== undefined) patient.firstName = firstName;
+    if (lastName !== undefined) patient.lastName = lastName;
+    if (dateOfBirth !== undefined) patient.dateOfBirth = dateOfBirth;
+    if (insuranceProvider !== undefined) patient.insuranceProvider = insuranceProvider;
+    if (insuranceId !== undefined) patient.insuranceId = insuranceId;
+    if (phone !== undefined) patient.phone = phone;
+    if (address !== undefined) patient.address = address;
+    if (requiredWeeklyHours !== undefined) patient.requiredWeeklyHours = requiredWeeklyHours;
+    if (status !== undefined) patient.status = status;
+    if (color !== undefined) patient.color = color;
+    if (teamId !== undefined) patient.teamId = teamId;
+    
+    try {
+      await patient.save();
+    } catch (saveError) {
+      console.error('Error saving patient:', saveError);
+      throw saveError;
+    }
     
     // Update assignees if provided
     if (assigneeIds) {
@@ -259,12 +298,14 @@ const updatePatient = async (req, res) => {
         id: patient.id,
         firstName: patient.firstName,
         lastName: patient.lastName,
-        status: patient.status
+        status: patient.status,
+        color: patient.color
       }
     });
     
   } catch (error) {
-    return res.status(500).json({ message: 'Error updating patient', error: error.message });
+    console.error('Error updating patient:', error);
+    return res.status(500).json({ message: 'Error updating patient', error: error.message, stack: error.stack });
   }
 };
 
@@ -388,6 +429,55 @@ const createPatientNote = async (req, res) => {
   }
 };
 
+/**
+ * Check if a color is already used by another patient
+ */
+const checkDuplicateColor = async (req, res) => {
+  try {
+    const { color, excludePatientId } = req.query;
+    
+    console.log('checkDuplicateColor called with:', { color, excludePatientId });
+    
+    if (!color) {
+      return res.status(400).json({ message: 'Color parameter is required' });
+    }
+    
+    const where = { 
+      color,
+      organizationId: req.user.organizationId 
+    };
+    if (excludePatientId) {
+      where.id = { [Op.ne]: excludePatientId };
+    }
+    
+    console.log('Query where clause:', where);
+    
+    const patients = await Patient.findAll({
+      where,
+      attributes: ['id', 'encryptedFirstName', 'encryptedLastName', 'color']
+    });
+    
+    console.log(`Found ${patients.length} patients with color ${color}`);
+    
+    // Sort patients by name after fetching (since we can't sort by virtual fields in SQL)
+    const sortedPatients = patients
+      .map(p => ({
+        id: p.id,
+        name: `${p.firstName} ${p.lastName}`
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    
+    return res.status(200).json({
+      isDuplicate: patients.length > 0,
+      patients: sortedPatients
+    });
+    
+  } catch (error) {
+    console.error('Error in checkDuplicateColor:', error);
+    return res.status(500).json({ message: 'Error checking color duplicate', error: error.message, stack: error.stack });
+  }
+};
+
 module.exports = {
   getAllPatients,
   getPatientById,
@@ -395,5 +485,6 @@ module.exports = {
   updatePatient,
   deletePatient,
   getPatientNotes,
-  createPatientNote
+  createPatientNote,
+  checkDuplicateColor
 };

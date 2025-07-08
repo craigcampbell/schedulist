@@ -597,6 +597,7 @@ const getPatientsWithAssignments = async (req, res) => {
           firstName: patient.firstName,
           lastName: patient.lastName,
           status: patient.status,
+          color: patient.color,
           primaryBCBA: patient.PrimaryBCBA ? {
             id: patient.PrimaryBCBA.id,
             name: `${patient.PrimaryBCBA.firstName} ${patient.PrimaryBCBA.lastName}`

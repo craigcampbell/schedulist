@@ -53,3 +53,11 @@ export const getAssignedPatients = async (status) => {
   });
   return response.data;
 };
+
+// Check if a color is already in use
+export const checkColorDuplicate = async (color, excludePatientId) => {
+  const response = await apiClient.get('/patient/check-color', {
+    params: { color, excludePatientId }
+  });
+  return response.data;
+};

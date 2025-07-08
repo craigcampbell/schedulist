@@ -29,6 +29,7 @@ db.Note = require('./note.model')(sequelize, Sequelize);
 db.Location = require('./location.model')(sequelize, Sequelize);
 db.Organization = require('./organization.model')(sequelize);
 db.Team = require('./team.model')(sequelize, Sequelize);
+db.Audit = require('./audit.model')(sequelize, Sequelize);
 
 // New scheduling models
 db.PatientScheduleTemplate = require('./patientScheduleTemplate.model')(sequelize, Sequelize);
@@ -36,16 +37,37 @@ db.PatientTimeBlock = require('./patientTimeBlock.model')(sequelize, Sequelize);
 db.TherapistAssignment = require('./therapistAssignment.model')(sequelize, Sequelize);
 db.ScheduleCoverage = require('./scheduleCoverage.model')(sequelize, Sequelize);
 
-// Define associations
+// Call associate methods if they exist
+Object.keys(db).forEach(modelName => {
+  if (db[modelName].associate) {
+    db[modelName].associate(db);
+  }
+});
 
-// Organization relationships
-db.Organization.hasMany(db.User, { foreignKey: 'organizationId', as: 'users' });
+// Define additional associations (Organization associations are handled by its associate method)
+
+// Additional Organization relationships that are not in the associate method
 db.User.belongsTo(db.Organization, { foreignKey: 'organizationId' });
-
-db.Organization.hasMany(db.Location, { foreignKey: 'organizationId', as: 'locations' });
 db.Location.belongsTo(db.Organization, { foreignKey: 'organizationId' });
 
-db.Organization.hasMany(db.Patient, { foreignKey: 'organizationId', as: 'patients' });
+// User-Location many-to-many relationship (users can belong to multiple locations)
+db.User.belongsToMany(db.Location, {
+  through: 'UserLocations',
+  as: 'Locations',
+  foreignKey: 'userId'
+});
+
+db.Location.belongsToMany(db.User, {
+  through: 'UserLocations',
+  as: 'Users',
+  foreignKey: 'locationId'
+});
+
+// Default location relationship
+db.User.belongsTo(db.Location, {
+  foreignKey: 'defaultLocationId',
+  as: 'DefaultLocation'
+});
 db.Patient.belongsTo(db.Organization, { foreignKey: 'organizationId' });
 
 // User and Role relationship (many-to-many)
@@ -84,12 +106,8 @@ db.Note.belongsTo(db.Patient);
 db.User.hasMany(db.Note, { foreignKey: 'authorId' });
 db.Note.belongsTo(db.User, { as: 'Author', foreignKey: 'authorId' });
 
-// Team relationships
+// Team relationships - User side only (Team side is handled in Team.associate)
 db.User.hasMany(db.Team, { foreignKey: 'leadBcbaId', as: 'LedTeams' });
-db.Team.belongsTo(db.User, { foreignKey: 'leadBcbaId', as: 'LeadBCBA' });
-
-db.User.belongsToMany(db.Team, { through: 'TeamMembers', as: 'Teams', foreignKey: 'userId' });
-db.Team.belongsToMany(db.User, { through: 'TeamMembers', as: 'Members', foreignKey: 'teamId' });
 
 // Patient Schedule Template relationships
 db.Patient.hasMany(db.PatientScheduleTemplate, { foreignKey: 'patientId', as: 'ScheduleTemplates' });
@@ -165,5 +183,52 @@ db.ScheduleCoverage.belongsTo(db.User, { foreignKey: 'createdById', as: 'Created
 // Self-referencing relationship for coverage history
 db.ScheduleCoverage.hasOne(db.ScheduleCoverage, { foreignKey: 'previousCoverageId', as: 'NextCoverage' });
 db.ScheduleCoverage.belongsTo(db.ScheduleCoverage, { foreignKey: 'previousCoverageId', as: 'PreviousCoverage' });
+
+// Team relationships - reverse association for User
+db.User.belongsToMany(db.Team, {
+  through: 'TeamMembers',
+  as: 'Teams',
+  foreignKey: 'userId'
+});
+
+// Patient-Team relationship
+db.Patient.belongsTo(db.Team, {
+  foreignKey: 'teamId',
+  as: 'Team'
+});
+
+db.Team.hasMany(db.Patient, {
+  foreignKey: 'teamId',
+  as: 'Patients'
+});
+
+// Appointment-Team relationship
+db.Appointment.belongsTo(db.Team, {
+  foreignKey: 'teamId',
+  as: 'Team'
+});
+
+db.Team.hasMany(db.Appointment, {
+  foreignKey: 'teamId',
+  as: 'Appointments'
+});
+
+// Audit relationships
+db.User.hasMany(db.Audit, { 
+  foreignKey: 'changedById', 
+  as: 'AuditTrail' 
+});
+db.Audit.belongsTo(db.User, { 
+  foreignKey: 'changedById', 
+  as: 'ChangedBy' 
+});
+
+db.Organization.hasMany(db.Audit, { 
+  foreignKey: 'organizationId', 
+  as: 'AuditLogs' 
+});
+db.Audit.belongsTo(db.Organization, { 
+  foreignKey: 'organizationId' 
+});
 
 module.exports = db;

@@ -1,16 +1,43 @@
 import { faker } from '@faker-js/faker';
 import bcrypt from 'bcrypt';
-import { addDays, subDays, addHours, addMonths, subMonths } from 'date-fns';
+import { addDays, subDays, addHours, addMonths, subMonths, startOfWeek, setHours, setMinutes, isSameDay } from 'date-fns';
 import db from '../src/models/index.js';
 
 // Number of users and entities to create
 const NUM_ADMINS = 2;
 const NUM_BCBAS = 5;
-const NUM_THERAPISTS = 10;
-const NUM_PATIENTS = 30;
-const NUM_LOCATIONS = 3;
-const APPOINTMENTS_PER_PATIENT = 5;
-const NOTES_PER_PATIENT = 3;
+const NUM_THERAPISTS = 15;
+const NUM_PATIENTS = 25;
+const NUM_LOCATIONS = 4;
+const NOTES_PER_PATIENT = 8;
+
+// Patient color palette for visual identification
+const PATIENT_COLORS = [
+  '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+  '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
+  '#F8C471', '#82E0AA', '#F1948A', '#85D8E0', '#D7BDE2',
+  '#A9DFBF', '#F9E79F', '#D5A6BD', '#AED6F1', '#F4D03F',
+  '#C39BD3', '#7FB3D3', '#76D7C4', '#F7DC6F', '#D2B4DE'
+];
+
+// Comprehensive insurance providers
+const INSURANCE_PROVIDERS = [
+  'Blue Cross Blue Shield', 'Aetna', 'Cigna', 'UnitedHealthcare', 
+  'Humana', 'Kaiser Permanente', 'Anthem', 'Molina Healthcare',
+  'Centene', 'Independence Blue Cross', 'Medicare', 'Medicaid',
+  'Tricare', 'BCBS Federal', 'Oscar Health'
+];
+
+// Appointment types with updated distribution and rules
+const APPOINTMENT_TYPE_DISTRIBUTION = {
+  direct: { weight: 0.75, avgHours: 2.0, requiresPatient: true },      // 75% direct therapy
+  indirect: { weight: 0.10, avgHours: 1.0, requiresPatient: false },   // 10% documentation/prep - NO PATIENT
+  supervision: { weight: 0.05, avgHours: 1.5, requiresPatient: false }, // 5% supervision - NO PATIENT
+  lunch: { weight: 0.05, avgHours: 0.5, requiresPatient: false },      // 5% lunch breaks - NO PATIENT
+  circle: { weight: 0.03, avgHours: 1.0, requiresPatient: true },      // 3% group activities
+  cleaning: { weight: 0.01, avgHours: 0.5, requiresPatient: false },    // 1% cleaning time - NO PATIENT
+  parentTraining: { weight: 0.01, avgHours: 1.5, requiresPatient: false } // 1% parent training - NO PATIENT
+};
 
 // Organization data
 const ORGANIZATIONS = {
@@ -170,143 +197,63 @@ const seedDatabase = async () => {
     const createdUsers = {};
     
     // Organization 1 - Active subscription (Sunshine Therapy)
-    createdUsers.sunshineAdmin = await createUserWithOrg(
-      TEST_USERS.sunshineAdmin, 
-      createdOrgs.active.id,
-      adminRole
-    );
+    createdUsers.sunshineAdmin = await createUserWithOrg(TEST_USERS.sunshineAdmin, createdOrgs.active.id, adminRole);
+    createdUsers.sunshineBCBA = await createUserWithOrg(TEST_USERS.sunshineBCBA, createdOrgs.active.id, bcbaRole);
+    createdUsers.sunshineTherapist = await createUserWithOrg(TEST_USERS.sunshineTherapist, createdOrgs.active.id, therapistRole);
     
-    createdUsers.sunshineBCBA = await createUserWithOrg(
-      TEST_USERS.sunshineBCBA,
-      createdOrgs.active.id,
-      bcbaRole
-    );
-    
-    createdUsers.sunshineTherapist = await createUserWithOrg(
-      TEST_USERS.sunshineTherapist,
-      createdOrgs.active.id,
-      therapistRole
-    );
-    
-    // Organization 2 - Expiring subscription (Healing Hearts)  
-    createdUsers.heartsAdmin = await createUserWithOrg(
-      TEST_USERS.heartsAdmin,
-      createdOrgs.expiring.id,
-      adminRole
-    );
-    
-    createdUsers.heartsBCBA = await createUserWithOrg(
-      TEST_USERS.heartsBCBA,
-      createdOrgs.expiring.id,
-      bcbaRole
-    );
-    
-    createdUsers.heartsTherapist = await createUserWithOrg(
-      TEST_USERS.heartsTherapist,
-      createdOrgs.expiring.id,
-      therapistRole
-    );
+    // Organization 2 - Expiring subscription (Healing Hearts)
+    createdUsers.heartsAdmin = await createUserWithOrg(TEST_USERS.heartsAdmin, createdOrgs.expiring.id, adminRole);
+    createdUsers.heartsBCBA = await createUserWithOrg(TEST_USERS.heartsBCBA, createdOrgs.expiring.id, bcbaRole);
+    createdUsers.heartsTherapist = await createUserWithOrg(TEST_USERS.heartsTherapist, createdOrgs.expiring.id, therapistRole);
     
     // Organization 3 - Inactive subscription (Coastal Behavior)
-    createdUsers.coastalAdmin = await createUserWithOrg(
-      TEST_USERS.coastalAdmin,
-      createdOrgs.inactive.id,
-      adminRole
-    );
+    createdUsers.coastalAdmin = await createUserWithOrg(TEST_USERS.coastalAdmin, createdOrgs.inactive.id, adminRole);
+    createdUsers.coastalBCBA = await createUserWithOrg(TEST_USERS.coastalBCBA, createdOrgs.inactive.id, bcbaRole);
+    createdUsers.coastalTherapist = await createUserWithOrg(TEST_USERS.coastalTherapist, createdOrgs.inactive.id, therapistRole);
     
-    createdUsers.coastalBCBA = await createUserWithOrg(
-      TEST_USERS.coastalBCBA,
-      createdOrgs.inactive.id,
-      bcbaRole
-    );
-    
-    createdUsers.coastalTherapist = await createUserWithOrg(
-      TEST_USERS.coastalTherapist,
-      createdOrgs.inactive.id,
-      therapistRole
-    );
-    
-    console.log('Created test users for all organizations');
+    console.log('Test users created for all organizations');
     
     // Create additional users for each organization
     const orgAdditionalUsers = {
-      active: {
-        admins: [],
-        bcbas: [],
-        therapists: []
-      },
-      expiring: {
-        admins: [],
-        bcbas: [],
-        therapists: []
-      },
-      inactive: {
-        admins: [],
-        bcbas: [],
-        therapists: []
-      }
+      active: { admins: [], bcbas: [], therapists: [] },
+      expiring: { admins: [], bcbas: [], therapists: [] },
+      inactive: { admins: [], bcbas: [], therapists: [] }
     };
     
-    // Create additional users for active organization (Sunshine)
-    orgAdditionalUsers.active.admins = await Promise.all(
-      Array(1).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.active.id);
-        await user.addRole(adminRole);
-        return user;
-      })
-    );
+    // Active organization (Sunshine)
+    for (let i = 1; i < NUM_ADMINS; i++) {
+      const admin = await createUserWithOrg(null, createdOrgs.active.id, adminRole);
+      orgAdditionalUsers.active.admins.push(admin);
+    }
     
-    orgAdditionalUsers.active.bcbas = await Promise.all(
-      Array(3).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.active.id);
-        await user.addRole(bcbaRole);
-        return user;
-      })
-    );
+    for (let i = 1; i < NUM_BCBAS - 1; i++) {
+      const bcba = await createUserWithOrg(null, createdOrgs.active.id, bcbaRole);
+      orgAdditionalUsers.active.bcbas.push(bcba);
+    }
     
-    orgAdditionalUsers.active.therapists = await Promise.all(
-      Array(8).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.active.id);
-        await user.addRole(therapistRole);
-        return user;
-      })
-    );
+    for (let i = 1; i < NUM_THERAPISTS - 2; i++) {
+      const therapist = await createUserWithOrg(null, createdOrgs.active.id, therapistRole);
+      orgAdditionalUsers.active.therapists.push(therapist);
+    }
     
-    // Create additional users for expiring organization (Hearts)
-    orgAdditionalUsers.expiring.bcbas = await Promise.all(
-      Array(2).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.expiring.id);
-        await user.addRole(bcbaRole);
-        return user;
-      })
-    );
+    // Expiring organization (Hearts) - fewer users
+    for (let i = 0; i < 1; i++) {
+      const bcba = await createUserWithOrg(null, createdOrgs.expiring.id, bcbaRole);
+      orgAdditionalUsers.expiring.bcbas.push(bcba);
+    }
     
-    orgAdditionalUsers.expiring.therapists = await Promise.all(
-      Array(4).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.expiring.id);
-        await user.addRole(therapistRole);
-        return user;
-      })
-    );
+    for (let i = 0; i < 3; i++) {
+      const therapist = await createUserWithOrg(null, createdOrgs.expiring.id, therapistRole);
+      orgAdditionalUsers.expiring.therapists.push(therapist);
+    }
     
-    // Create additional users for inactive organization (Coastal)
-    orgAdditionalUsers.inactive.bcbas = await Promise.all(
-      Array(2).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.inactive.id);
-        await user.addRole(bcbaRole);
-        return user;
-      })
-    );
+    // Inactive organization (Coastal) - minimal users
+    for (let i = 0; i < 1; i++) {
+      const therapist = await createUserWithOrg(null, createdOrgs.inactive.id, therapistRole);
+      orgAdditionalUsers.inactive.therapists.push(therapist);
+    }
     
-    orgAdditionalUsers.inactive.therapists = await Promise.all(
-      Array(3).fill().map(async () => {
-        const user = await createUser(null, createdOrgs.inactive.id);
-        await user.addRole(therapistRole);
-        return user;
-      })
-    );
-    
-    console.log('Created additional users for all organizations');
+    console.log('Additional users created for all organizations');
     
     // Create locations for each organization
     const orgLocations = {
@@ -315,22 +262,21 @@ const seedDatabase = async () => {
       inactive: []
     };
     
-    // Create locations for active organization (Sunshine)
-    orgLocations.active = await Promise.all(
-      Array(3).fill().map(() => createLocation(createdOrgs.active.id))
-    );
+    // Active organization locations
+    for (let i = 0; i < NUM_LOCATIONS - 1; i++) {
+      const location = await createLocation(createdOrgs.active.id);
+      orgLocations.active.push(location);
+    }
     
-    // Create locations for expiring organization (Hearts)
-    orgLocations.expiring = await Promise.all(
-      Array(2).fill().map(() => createLocation(createdOrgs.expiring.id))
-    );
+    // Expiring organization locations (just 1)
+    const expiringLocation = await createLocation(createdOrgs.expiring.id);
+    orgLocations.expiring.push(expiringLocation);
     
-    // Create locations for inactive organization (Coastal)
-    orgLocations.inactive = await Promise.all(
-      Array(1).fill().map(() => createLocation(createdOrgs.inactive.id))
-    );
+    // Inactive organization locations (just 1)
+    const inactiveLocation = await createLocation(createdOrgs.inactive.id);
+    orgLocations.inactive.push(inactiveLocation);
     
-    console.log('Created locations for all organizations');
+    console.log('Locations created for all organizations');
     
     // Create patients for each organization
     const orgPatients = {
@@ -339,24 +285,25 @@ const seedDatabase = async () => {
       inactive: []
     };
     
-    // Create patients for active organization (Sunshine)
-    orgPatients.active = await Promise.all(
-      Array(15).fill().map(() => createPatient(createdOrgs.active.id))
-    );
+    // Active organization patients (most patients)
+    for (let i = 0; i < NUM_PATIENTS - 5; i++) {
+      const patient = await createPatient(createdOrgs.active.id, i);
+      orgPatients.active.push(patient);
+    }
     
-    // Create patients for expiring organization (Hearts)
-    orgPatients.expiring = await Promise.all(
-      Array(10).fill().map(() => createPatient(createdOrgs.expiring.id))
-    );
+    // Expiring organization patients
+    for (let i = 0; i < 4; i++) {
+      const patient = await createPatient(createdOrgs.expiring.id, NUM_PATIENTS - 5 + i);
+      orgPatients.expiring.push(patient);
+    }
     
-    // Create patients for inactive organization (Coastal)
-    orgPatients.inactive = await Promise.all(
-      Array(5).fill().map(() => createPatient(createdOrgs.inactive.id))
-    );
+    // Inactive organization patients (just 1)
+    const inactivePatient = await createPatient(createdOrgs.inactive.id, NUM_PATIENTS - 1);
+    orgPatients.inactive.push(inactivePatient);
     
-    console.log('Created patients for all organizations');
+    console.log('Patients created for all organizations');
     
-    // Assign patients to BCBAs and therapists for each organization
+    // Assign patients to BCBAs and therapists
     // Active organization (Sunshine)
     const activeBCBAs = [createdUsers.sunshineBCBA, ...orgAdditionalUsers.active.bcbas];
     const activeTherapists = [createdUsers.sunshineTherapist, ...orgAdditionalUsers.active.therapists];
@@ -366,6 +313,11 @@ const seedDatabase = async () => {
       const numBcbas = Math.random() > 0.7 ? 2 : 1;
       const selectedBcbas = getRandomElements(activeBCBAs, numBcbas);
       await patient.addAssignees(selectedBcbas);
+      
+      // Set the first BCBA as primary
+      if (selectedBcbas.length > 0) {
+        await patient.setPrimaryBCBA(selectedBcbas[0]);
+      }
       
       // Assign to 1-3 therapists
       const numTherapists = Math.floor(Math.random() * 3) + 1;
@@ -383,6 +335,11 @@ const seedDatabase = async () => {
       const selectedBcbas = getRandomElements(expiringBCBAs, numBcbas);
       await patient.addAssignees(selectedBcbas);
       
+      // Set the first BCBA as primary
+      if (selectedBcbas.length > 0) {
+        await patient.setPrimaryBCBA(selectedBcbas[0]);
+      }
+      
       // Assign to 1-3 therapists
       const numTherapists = Math.floor(Math.random() * 3) + 1;
       const selectedTherapists = getRandomElements(expiringTherapists, numTherapists);
@@ -399,6 +356,11 @@ const seedDatabase = async () => {
       const selectedBcbas = getRandomElements(inactiveBCBAs, numBcbas);
       await patient.addAssignees(selectedBcbas);
       
+      // Set the first BCBA as primary
+      if (selectedBcbas.length > 0) {
+        await patient.setPrimaryBCBA(selectedBcbas[0]);
+      }
+      
       // Assign to 1-3 therapists
       const numTherapists = Math.floor(Math.random() * 3) + 1;
       const selectedTherapists = getRandomElements(inactiveTherapists, numTherapists);
@@ -407,63 +369,69 @@ const seedDatabase = async () => {
     
     console.log('Assigned patients to BCBAs and therapists for all organizations');
     
-    // Create appointments for each organization
+    // Create comprehensive appointment schedules for each organization
     // Active organization (Sunshine)
     let allAppointments = [];
-    for (const patient of orgPatients.active) {
-      const patientAssignees = await patient.getAssignees();
-      const patientTherapists = patientAssignees.filter(user => 
-        user.Roles?.some(role => role.name === 'therapist')
-      );
+    const therapistSchedules = new Map(); // Track daily schedules for lunch rules
+    
+    // Create a week's worth of appointments for each therapist
+    const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 }); // Start on Monday
+    
+    for (const therapist of activeTherapists) {
+      // Get patients assigned to this therapist
+      const therapistPatients = [];
+      for (const patient of orgPatients.active) {
+        const assignees = await patient.getAssignees();
+        if (assignees.some(a => a.id === therapist.id)) {
+          therapistPatients.push(patient);
+        }
+      }
       
-      if (patientTherapists.length === 0) continue;
+      if (therapistPatients.length === 0) continue;
       
-      const appointments = await Promise.all(
-        Array(APPOINTMENTS_PER_PATIENT).fill().map(() => 
-          createAppointment(patient, patientTherapists, orgLocations.active)
-        )
-      );
-      allAppointments.push(...appointments);
+      // Create appointments for 5 weekdays
+      for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
+        const currentDay = addDays(weekStart, dayOffset);
+        const dailyAppointments = await createDailyScheduleForTherapist(
+          therapist,
+          therapistPatients,
+          orgLocations.active,
+          currentDay,
+          therapistSchedules
+        );
+        allAppointments.push(...dailyAppointments);
+      }
     }
     
-    // Expiring organization (Hearts)
-    for (const patient of orgPatients.expiring) {
-      const patientAssignees = await patient.getAssignees();
-      const patientTherapists = patientAssignees.filter(user => 
-        user.Roles?.some(role => role.name === 'therapist')
-      );
+    // Expiring organization (Hearts) - similar but less data
+    for (const therapist of expiringTherapists) {
+      const therapistPatients = [];
+      for (const patient of orgPatients.expiring) {
+        const assignees = await patient.getAssignees();
+        if (assignees.some(a => a.id === therapist.id)) {
+          therapistPatients.push(patient);
+        }
+      }
       
-      if (patientTherapists.length === 0) continue;
+      if (therapistPatients.length === 0) continue;
       
-      const appointments = await Promise.all(
-        Array(APPOINTMENTS_PER_PATIENT).fill().map(() => 
-          createAppointment(patient, patientTherapists, orgLocations.expiring)
-        )
-      );
-      allAppointments.push(...appointments);
-    }
-    
-    // Inactive organization (Coastal)
-    for (const patient of orgPatients.inactive) {
-      const patientAssignees = await patient.getAssignees();
-      const patientTherapists = patientAssignees.filter(user => 
-        user.Roles?.some(role => role.name === 'therapist')
-      );
-      
-      if (patientTherapists.length === 0) continue;
-      
-      const appointments = await Promise.all(
-        Array(Math.floor(APPOINTMENTS_PER_PATIENT / 2)).fill().map(() => 
-          createAppointment(patient, patientTherapists, orgLocations.inactive)
-        )
-      );
-      allAppointments.push(...appointments);
+      // Create appointments for current week
+      for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
+        const currentDay = addDays(weekStart, dayOffset);
+        const dailyAppointments = await createDailyScheduleForTherapist(
+          therapist,
+          therapistPatients,
+          orgLocations.expiring,
+          currentDay,
+          therapistSchedules
+        );
+        allAppointments.push(...dailyAppointments);
+      }
     }
     
     console.log(`Created ${allAppointments.length} appointments across all organizations`);
     
     // Create notes for each organization
-    // Active organization (Sunshine)
     let allNotes = [];
     for (const patient of orgPatients.active) {
       const patientAssignees = await patient.getAssignees();
@@ -494,137 +462,7 @@ const seedDatabase = async () => {
       allNotes.push(...notes);
     }
     
-    // Inactive organization (Coastal)
-    for (const patient of orgPatients.inactive) {
-      const patientAssignees = await patient.getAssignees();
-      const notesCreators = patientAssignees;
-      
-      if (notesCreators.length === 0) continue;
-      
-      const notes = await Promise.all(
-        Array(Math.floor(NOTES_PER_PATIENT / 2)).fill().map(() => 
-          createNote(patient, notesCreators)
-        )
-      );
-      allNotes.push(...notes);
-    }
-    
     console.log(`Created ${allNotes.length} clinical notes across all organizations`);
-    
-    // Create specific appointments for test users to ensure they have data to view
-    // Ensure test therapists have appointments today and this week
-    // Active organization (Sunshine)
-    await Promise.all([
-      // Today's appointment
-      createSpecificAppointment(
-        orgPatients.active[0], 
-        createdUsers.sunshineTherapist, 
-        orgLocations.active[0],
-        new Date(),
-        1  // 1 hour duration
-      ),
-      // Tomorrow's appointment
-      createSpecificAppointment(
-        orgPatients.active[1], 
-        createdUsers.sunshineTherapist, 
-        orgLocations.active[0],
-        addDays(new Date(), 1),
-        1.5  // 1.5 hours duration
-      ),
-      // Later this week
-      createSpecificAppointment(
-        orgPatients.active[2], 
-        createdUsers.sunshineTherapist, 
-        orgLocations.active[1],
-        addDays(new Date(), 3),
-        2  // 2 hours duration
-      )
-    ]);
-    
-    // Expiring organization (Hearts)
-    await Promise.all([
-      // Today's appointment
-      createSpecificAppointment(
-        orgPatients.expiring[0], 
-        createdUsers.heartsTherapist, 
-        orgLocations.expiring[0],
-        new Date(),
-        1  // 1 hour duration
-      ),
-      // Tomorrow's appointment
-      createSpecificAppointment(
-        orgPatients.expiring[1], 
-        createdUsers.heartsTherapist, 
-        orgLocations.expiring[0],
-        addDays(new Date(), 1),
-        1.5  // 1.5 hours duration
-      )
-    ]);
-    
-    // Inactive organization (Coastal)
-    await Promise.all([
-      // Today's appointment (but would be inaccessible due to inactive subscription)
-      createSpecificAppointment(
-        orgPatients.inactive[0], 
-        createdUsers.coastalTherapist, 
-        orgLocations.inactive[0],
-        new Date(),
-        1  // 1 hour duration
-      )
-    ]);
-    
-    // Ensure BCBAs can see appointments for therapists they supervise
-    // Active organization (Sunshine)
-    const sunshineBcbaPatients = orgPatients.active.slice(0, 5);
-    await createdUsers.sunshineBCBA.addPatients(sunshineBcbaPatients);
-    
-    // Expiring organization (Hearts)
-    const heartsBcbaPatients = orgPatients.expiring.slice(0, 3);
-    await createdUsers.heartsBCBA.addPatients(heartsBcbaPatients);
-    
-    // Inactive organization (Coastal)
-    const coastalBcbaPatients = orgPatients.inactive.slice(0, 2);
-    await createdUsers.coastalBCBA.addPatients(coastalBcbaPatients);
-    
-    // Add notes for test therapists
-    // Active organization (Sunshine)
-    await Promise.all(
-      sunshineBcbaPatients.map(patient => 
-        createSpecificNote(
-          patient,
-          createdUsers.sunshineTherapist,
-          'session',
-          faker.lorem.paragraph(5),
-          subDays(new Date(), Math.floor(Math.random() * 10))
-        )
-      )
-    );
-    
-    // Expiring organization (Hearts)
-    await Promise.all(
-      heartsBcbaPatients.map(patient => 
-        createSpecificNote(
-          patient,
-          createdUsers.heartsTherapist,
-          'session',
-          faker.lorem.paragraph(5),
-          subDays(new Date(), Math.floor(Math.random() * 10))
-        )
-      )
-    );
-    
-    // Inactive organization (Coastal)
-    await Promise.all(
-      coastalBcbaPatients.map(patient => 
-        createSpecificNote(
-          patient,
-          createdUsers.coastalTherapist,
-          'session',
-          faker.lorem.paragraph(5),
-          subDays(new Date(), Math.floor(Math.random() * 30)) // Older notes
-        )
-      )
-    );
     
     console.log('Database seeding completed successfully');
     console.log('\nTest account credentials:');
@@ -675,12 +513,12 @@ const seedDatabase = async () => {
 // Helper function to create a user with organization and role
 async function createUserWithOrg(userData, orgId, role) {
   const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash(userData.password, salt);
+  const hashedPassword = await bcrypt.hash(userData ? userData.password : 'Password123', salt);
   
   const user = await db.User.create({
-    firstName: userData.firstName,
-    lastName: userData.lastName,
-    email: userData.email, // Ensure no mailto: prefix
+    firstName: userData ? userData.firstName : faker.person.firstName(),
+    lastName: userData ? userData.lastName : faker.person.lastName(),
+    email: userData ? userData.email : faker.internet.email().toLowerCase(),
     password: hashedPassword,
     phone: faker.phone.number(),
     organizationId: orgId,
@@ -691,43 +529,6 @@ async function createUserWithOrg(userData, orgId, role) {
   await user.addRole(role);
   
   return user;
-}
-
-// Helper function to create a random user
-async function createUser(userData = null, orgId = null) {
-  const salt = await bcrypt.genSalt(10);
-  
-  if (userData) {
-    // If user data is provided, use it (for test users)
-    const hashedPassword = await bcrypt.hash(userData.password, salt);
-    return await db.User.create({
-      firstName: userData.firstName,
-      lastName: userData.lastName,
-      email: userData.email, // Ensure no mailto: prefix
-      password: hashedPassword,
-      phone: faker.phone.number(),
-      organizationId: orgId,
-      active: true
-    });
-  }
-  
-  // Otherwise create a random user
-  const firstName = faker.person.firstName();
-  const lastName = faker.person.lastName();
-  // Ensure no mailto: prefix by creating email directly
-  const email = `${firstName.toLowerCase()}.${lastName.toLowerCase()}@example.com`.replace(/[^a-zA-Z0-9.@]/g, '');
-  const password = faker.internet.password({ length: 10 });
-  const hashedPassword = await bcrypt.hash(password, salt);
-  
-  return await db.User.create({
-    firstName,
-    lastName,
-    email,
-    password: hashedPassword,
-    phone: faker.phone.number(),
-    organizationId: orgId,
-    active: true
-  });
 }
 
 // Helper function to create a random location
@@ -744,92 +545,241 @@ async function createLocation(orgId = null) {
   });
 }
 
-// Helper function to create a random patient
-async function createPatient(orgId = null) {
+// Helper function to create a random patient with comprehensive data
+async function createPatient(orgId = null, colorIndex = 0) {
   const firstName = faker.person.firstName();
   const lastName = faker.person.lastName();
+  
+  // Generate realistic birthdate for children/teens (2-18 years old)
   const dateOfBirth = faker.date.birthdate({ min: 2, max: 18, mode: 'age' });
-  const insuranceProvider = faker.helpers.arrayElement([
-    'Blue Cross', 'Aetna', 'Cigna', 'UnitedHealthcare', 'Humana', 'Kaiser', 'Medicare', 'Medicaid'
-  ]);
+  
+  // Select insurance provider and generate comprehensive insurance info
+  const insuranceProvider = faker.helpers.arrayElement(INSURANCE_PROVIDERS);
+  const insuranceId = generateInsuranceId(insuranceProvider);
+  
+  // Generate realistic phone number
+  const phone = faker.phone.number('(###) ###-####');
+  
+  // Generate full address
+  const address = `${faker.location.streetAddress()}, ${faker.location.city()}, ${faker.location.state({ abbreviated: true })} ${faker.location.zipCode()}`;
+  
+  // Assign 25-35 required weekly hours
+  const requiredWeeklyHours = faker.number.int({ min: 25, max: 35 });
+  
+  // Assign color from palette (cycling through colors)
+  const color = PATIENT_COLORS[colorIndex % PATIENT_COLORS.length];
   
   return await db.Patient.create({
     firstName,
     lastName,
     dateOfBirth: dateOfBirth.toISOString(),
     insuranceProvider,
-    insuranceId: faker.finance.accountNumber(),
-    phone: faker.phone.number(),
-    address: faker.location.streetAddress() + ', ' + faker.location.city() + ', ' + faker.location.state() + ' ' + faker.location.zipCode(),
-    requiredWeeklyHours: faker.helpers.arrayElement([5, 10, 15, 20, 25, 30]),
-    status: faker.helpers.arrayElement(['active', 'active', 'active', 'inactive']),
+    insuranceId,
+    phone,
+    address,
+    requiredWeeklyHours,
+    color,
+    status: faker.helpers.arrayElement(['active', 'active', 'active', 'active', 'inactive']), // 80% active
     organizationId: orgId
   });
 }
 
-// Helper function to create a random appointment
-async function createAppointment(patient, therapists, locations) {
-  const therapist = faker.helpers.arrayElement(therapists);
-  const location = faker.helpers.arrayElement(locations);
-  const startDate = faker.date.soon({ days: 14 });
-  const durationHours = faker.helpers.arrayElement([1, 1.5, 2]);
-  const endDate = new Date(startDate.getTime() + durationHours * 60 * 60 * 1000);
-  
-  return await db.Appointment.create({
-    startTime: startDate,
-    endTime: endDate,
-    title: faker.helpers.arrayElement(['Therapy Session', 'Assessment', 'Parent Meeting', 'Skills Training']),
-    status: faker.helpers.arrayElement(['scheduled', 'scheduled', 'scheduled', 'completed', 'cancelled']),
-    notes: Math.random() > 0.5 ? faker.lorem.sentence() : null,
-    recurring: Math.random() > 0.8,
-    recurringPattern: Math.random() > 0.8 ? { frequency: 'weekly', day: startDate.getDay() } : null,
-    therapistId: therapist.id,
-    patientId: patient.id,
-    locationId: location.id
-  });
+// Helper function to generate realistic insurance IDs
+function generateInsuranceId(provider) {
+  switch (provider.toLowerCase()) {
+    case 'medicare':
+      return `${faker.number.int({ min: 100000000, max: 999999999 })}-${faker.string.alpha({ length: 2 }).toUpperCase()}`;
+    case 'medicaid':
+      return faker.number.int({ min: 10000000000, max: 99999999999 }).toString();
+    case 'tricare':
+      return `${faker.number.int({ min: 1000000000, max: 9999999999 })}`;
+    default:
+      return `${faker.string.alphanumeric({ length: 3 }).toUpperCase()}${faker.number.int({ min: 100000000, max: 999999999 })}`;
+  }
 }
 
-// Helper function to create a specific appointment for testing
-async function createSpecificAppointment(patient, therapist, location, baseDate, durationHours) {
-  // Set to a reasonable hour (9am-5pm)
-  const hour = 9 + Math.floor(Math.random() * 8);
-  const startDate = new Date(baseDate);
-  startDate.setHours(hour, 0, 0, 0);
+// Helper function to create a daily schedule for a therapist
+async function createDailyScheduleForTherapist(therapist, patients, locations, date, therapistSchedules) {
+  const appointments = [];
+  const dayKey = `${therapist.id}-${date.toISOString().split('T')[0]}`;
   
-  const endDate = new Date(startDate);
-  endDate.setHours(startDate.getHours() + Math.floor(durationHours));
-  endDate.setMinutes((durationHours % 1) * 60);
+  // Track hours for this day
+  let dailyDirectHours = 0;
+  let totalDailyHours = 0;
+  const dailyAppointments = [];
   
-  return await db.Appointment.create({
-    startTime: startDate,
-    endTime: endDate,
-    title: faker.helpers.arrayElement(['Therapy Session', 'Assessment', 'Parent Meeting', 'Skills Training']),
+  // Start time at 8 AM
+  let currentTime = setMinutes(setHours(date, 8), 0);
+  const endOfDay = setHours(date, 17); // 5 PM end
+  
+  // Shuffle patients for variety
+  const shuffledPatients = [...patients].sort(() => 0.5 - Math.random());
+  let patientIndex = 0;
+  
+  while (currentTime < endOfDay && totalDailyHours < 8) {
+    // Determine next appointment type
+    let appointmentType = 'direct';
+    let duration = 2; // Default 2 hours for direct
+    let needsPatient = true;
+    
+    // Check if we need a lunch break (after 6 hours of direct service, no lunch yet today)
+    const hasLunchToday = dailyAppointments.some(app => app.serviceType === 'lunch');
+    if (dailyDirectHours >= 6 && !hasLunchToday) {
+      appointmentType = 'lunch';
+      duration = 0.5;
+      needsPatient = false;
+    } else {
+      // Random selection based on weights
+      const rand = Math.random();
+      if (rand < 0.85) {
+        // 85% direct service
+        appointmentType = 'direct';
+        duration = faker.helpers.arrayElement([1.5, 2, 2.5]);
+        needsPatient = true;
+      } else if (rand < 0.90) {
+        // 5% indirect work
+        appointmentType = 'indirect';
+        duration = 1;
+        needsPatient = false;
+      } else if (rand < 0.93) {
+        // 3% circle time
+        appointmentType = 'circle';
+        duration = 1;
+        needsPatient = true;
+      } else if (rand < 0.96) {
+        // 3% supervision
+        appointmentType = 'supervision';
+        duration = 1;
+        needsPatient = false;
+      } else if (rand < 0.98) {
+        // 2% cleaning
+        appointmentType = 'cleaning';
+        duration = 0.5;
+        needsPatient = false;
+      } else {
+        // 2% parent training (BCBA only - skip for regular therapists)
+        appointmentType = 'indirect'; // Default to indirect for therapists
+        duration = 1;
+        needsPatient = false;
+      }
+    }
+    
+    // Check if we have enough time left in the day
+    const endTime = addHours(currentTime, duration);
+    if (endTime > endOfDay) break;
+    
+    // Create appointment
+    const location = faker.helpers.arrayElement(locations);
+    const patient = needsPatient ? shuffledPatients[patientIndex % shuffledPatients.length] : null;
+    
+    const appointment = await createAppointmentWithDetails(
+      patient,
+      therapist,
+      location,
+      currentTime,
+      duration,
+      appointmentType
+    );
+    
+    appointments.push(appointment);
+    dailyAppointments.push(appointment);
+    
+    // Update counters
+    if (appointmentType === 'direct') {
+      dailyDirectHours += duration;
+    }
+    totalDailyHours += duration;
+    
+    // Move to next time slot
+    currentTime = endTime;
+    
+    // Add a 15-minute break between appointments sometimes
+    if (Math.random() > 0.7 && totalDailyHours < 7) {
+      currentTime = addHours(currentTime, 0.25);
+    }
+    
+    // Move to next patient for variety
+    if (needsPatient) {
+      patientIndex++;
+    }
+  }
+  
+  // Store the schedule for tracking
+  therapistSchedules.set(dayKey, {
+    directHours: dailyDirectHours,
+    totalHours: totalDailyHours,
+    appointments: dailyAppointments
+  });
+  
+  return appointments;
+}
+
+// Helper function to create appointment with specific details
+async function createAppointmentWithDetails(patient, therapist, location, startTime, durationHours, serviceType) {
+  const endTime = addHours(startTime, durationHours);
+  
+  // Generate appropriate title based on service type
+  const titles = {
+    direct: ['Direct Therapy', 'ABA Session', 'Skills Training', 'Behavior Intervention'],
+    indirect: ['Documentation', 'Prep Work', 'Program Planning', 'Data Review'],
+    supervision: ['Supervision Meeting', 'Case Review', 'Training Session'],
+    lunch: ['Lunch Break'],
+    circle: ['Circle Time', 'Group Activity', 'Social Skills Group'],
+    cleaning: ['Room Cleaning', 'Equipment Sanitization'],
+    parentTraining: ['Parent Training', 'Family Meeting', 'Parent Consultation']
+  };
+  
+  const title = faker.helpers.arrayElement(titles[serviceType] || titles.direct);
+  
+  // Create appointment data
+  const appointmentData = {
+    startTime,
+    endTime,
+    title,
+    serviceType,
     status: 'scheduled',
-    notes: faker.lorem.sentence(),
+    notes: Math.random() > 0.6 ? faker.lorem.sentence() : null,
     recurring: false,
     therapistId: therapist.id,
-    patientId: patient.id,
     locationId: location.id
-  });
+  };
+  
+  // Only add patientId if the service type requires a patient
+  if (patient && APPOINTMENT_TYPE_DISTRIBUTION[serviceType]?.requiresPatient) {
+    appointmentData.patientId = patient.id;
+  }
+  
+  return await db.Appointment.create(appointmentData);
 }
 
 // Helper function to create a random note
 async function createNote(patient, users) {
   const author = faker.helpers.arrayElement(users);
-  const noteType = faker.helpers.arrayElement(['session', 'progress', 'assessment', 'general']);
-  const sessionDate = faker.date.recent({ days: 30 });
+  const noteType = faker.helpers.arrayElement(['session', 'progress', 'assessment', 'general', 'behavior', 'goals']);
+  const sessionDate = faker.date.recent({ days: 45 });
   
-  return await db.Note.create({
-    content: faker.lorem.paragraphs(2),
-    noteType,
-    sessionDate,
-    authorId: author.id,
-    patientId: patient.id
-  });
-}
-
-// Helper function to create a specific note for testing
-async function createSpecificNote(patient, author, noteType, content, sessionDate) {
+  // Generate more realistic note content based on type
+  let content;
+  switch (noteType) {
+    case 'session':
+      content = `Session Summary: ${faker.lorem.paragraph(3)} Target behaviors: ${faker.lorem.sentence()} Progress observed: ${faker.lorem.sentence()}`;
+      break;
+    case 'progress':
+      content = `Progress Update: ${faker.lorem.paragraph(2)} Goals achieved: ${faker.lorem.sentence()} Next steps: ${faker.lorem.sentence()}`;
+      break;
+    case 'assessment':
+      content = `Assessment Results: ${faker.lorem.paragraph(3)} Recommendations: ${faker.lorem.sentence()}`;
+      break;
+    case 'behavior':
+      content = `Behavior Analysis: ${faker.lorem.paragraph(2)} Interventions applied: ${faker.lorem.sentence()} Response to intervention: ${faker.lorem.sentence()}`;
+      break;
+    case 'goals':
+      content = `Goal Review: ${faker.lorem.paragraph(2)} Target skills: ${faker.lorem.sentence()} Mastery criteria: ${faker.lorem.sentence()}`;
+      break;
+    default:
+      content = faker.lorem.paragraphs(2);
+  }
+  
   return await db.Note.create({
     content,
     noteType,

@@ -78,6 +78,15 @@ module.exports = (sequelize, DataTypes) => {
         key: 'id'
       }
     },
+    teamId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'Teams',
+        key: 'id'
+      },
+      comment: 'Team associated with this appointment (from patient)'
+    },
   }, {
     timestamps: true,
   });

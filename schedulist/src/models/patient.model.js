@@ -83,6 +83,15 @@ module.exports = (sequelize, DataTypes) => {
         key: 'id'
       }
     },
+    teamId: {
+      type: DataTypes.UUID,
+      allowNull: true,
+      references: {
+        model: 'Teams',
+        key: 'id'
+      },
+      comment: 'Team assigned to this patient (BCBA team)'
+    },
     // Schedule preferences and constraints
     preferredTherapistIds: {
       type: DataTypes.JSON,
@@ -155,6 +164,16 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('low', 'medium', 'high', 'critical'),
       defaultValue: 'medium',
       comment: 'Priority level for scheduling (affects auto-assignment order)'
+    },
+    // Visual preferences
+    color: {
+      type: DataTypes.STRING(7),
+      allowNull: true,
+      defaultValue: '#6B7280',
+      comment: 'Color assigned to patient for visual identification in schedules (hex format)',
+      validate: {
+        is: /^#[0-9A-Fa-f]{6}$/
+      }
     },
     
     // Virtual fields that get decrypted

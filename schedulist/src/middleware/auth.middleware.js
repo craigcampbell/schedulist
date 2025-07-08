@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { User, Role, Organization } = require('../models');
+const { User, Role, Organization, Patient } = require('../models');
 
 /**
  * Middleware to verify JWT token
@@ -91,14 +91,31 @@ const isTherapist = (req, res, next) => {
  */
 const hasPatientAccess = async (req, res, next) => {
   try {
-    const { id: userId, roles } = req.user;
+    const { id: userId, roles, organizationId } = req.user;
     const patientId = req.params.id;
+    
+    console.log('hasPatientAccess check:', { userId, patientId, roles });
     
     // Admins have access to all patients
     if (roles.includes('admin')) {
       return next();
     }
     
+    // For BCBAs, check if the patient belongs to their organization
+    if (roles.includes('bcba')) {
+      const patient = await Patient.findOne({
+        where: { 
+          id: patientId,
+          organizationId: organizationId
+        }
+      });
+      
+      if (patient) {
+        return next();
+      }
+    }
+    
+    // For therapists, check assignment
     const user = await User.findByPk(userId, {
       include: [{ 
         model: Patient, 
@@ -108,13 +125,14 @@ const hasPatientAccess = async (req, res, next) => {
       }]
     });
     
-    if (!user.Patients || user.Patients.length === 0) {
+    if (!user || !user.Patients || user.Patients.length === 0) {
       return res.status(403).json({ message: 'You do not have access to this patient' });
     }
     
     next();
   } catch (error) {
-    return res.status(500).json({ message: 'Server error' });
+    console.error('Error in hasPatientAccess middleware:', error);
+    return res.status(500).json({ message: 'Server error', error: error.message });
   }
 };
 

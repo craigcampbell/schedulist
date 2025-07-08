@@ -1,5 +1,6 @@
 const { Appointment, Patient, User, Location, Team } = require('../models');
 const { Op } = require('sequelize');
+const { validateAppointment } = require('../utils/conflictDetection');
 
 /**
  * Get schedule by view type and date range
@@ -101,6 +102,12 @@ const getSchedule = async (req, res) => {
           attributes: ['id', 'name', 'workingHoursStart', 'workingHoursEnd'],
           where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
           required: false
+        },
+        {
+          model: Team,
+          as: 'Team',
+          attributes: ['id', 'name', 'color'],
+          required: false
         }
       ],
       order: [['startTime', 'ASC']]
@@ -134,6 +141,11 @@ const getSchedule = async (req, res) => {
           start: appt.Location.workingHoursStart,
           end: appt.Location.workingHoursEnd
         }
+      } : null,
+      team: appt.Team ? {
+        id: appt.Team.id,
+        name: appt.Team.name,
+        color: appt.Team.color
       } : null,
       recurring: appt.recurring,
       recurringPattern: appt.recurringPattern,
@@ -376,6 +388,7 @@ const createAppointment = async (req, res) => {
       endTime,
       title,
       notes,
+      serviceType,
       recurring,
       recurringPattern,
       excludeWeekends,
@@ -394,10 +407,20 @@ const createAppointment = async (req, res) => {
       useNextAvailableSlot
     });
     
-    // Validate patient exists
-    const patient = await Patient.findByPk(patientId);
-    if (!patient) {
-      return res.status(404).json({ message: 'Patient not found' });
+    // Validate patient exists (only for direct services)
+    let patient = null;
+    let teamId = null;
+    
+    if (serviceType === 'direct' || !serviceType) {
+      if (!patientId) {
+        return res.status(400).json({ message: 'Patient is required for direct services' });
+      }
+      patient = await Patient.findByPk(patientId);
+      if (!patient) {
+        return res.status(404).json({ message: 'Patient not found' });
+      }
+      // Get the patient's team if they have one
+      teamId = patient.teamId;
     }
     
     // Validate therapist exists (if provided)
@@ -456,35 +479,26 @@ const createAppointment = async (req, res) => {
         return res.status(400).json({ message: 'Session duration must be at least 30 minutes' });
       }
       
-      // Check for scheduling conflicts (only if therapist is assigned)
-      if (therapistId && therapistId !== '') {
-        const conflictingAppointment = await Appointment.findOne({
-          where: {
-            therapistId,
-            [Op.or]: [
-              {
-                startTime: {
-                  [Op.between]: [appointmentStart, appointmentEnd]
-                }
-              },
-              {
-                endTime: {
-                  [Op.between]: [appointmentStart, appointmentEnd]
-                }
-              },
-              {
-                [Op.and]: [
-                  { startTime: { [Op.lte]: appointmentStart } },
-                  { endTime: { [Op.gte]: appointmentEnd } }
-                ]
-              }
-            ]
-          }
+      // Enhanced conflict detection using comprehensive validation
+      const validation = await validateAppointment({
+        patientId,
+        therapistId: therapistId && therapistId !== '' ? therapistId : null,
+        startTime: appointmentStart,
+        endTime: appointmentEnd
+      });
+
+      if (!validation.isValid) {
+        return res.status(409).json({ 
+          message: 'Appointment conflicts detected',
+          errors: validation.errors,
+          conflicts: validation.conflicts,
+          warnings: validation.warnings
         });
-        
-        if (conflictingAppointment) {
-          return res.status(409).json({ message: 'This time slot conflicts with an existing appointment' });
-        }
+      }
+
+      // Log warnings if any (non-blocking)
+      if (validation.warnings.length > 0) {
+        console.log('Appointment creation warnings:', validation.warnings);
       }
     }
     
@@ -503,7 +517,8 @@ const createAppointment = async (req, res) => {
       excludeWeekends: excludeWeekends !== undefined ? excludeWeekends : true,
       excludeHolidays: excludeHolidays !== undefined ? excludeHolidays : true,
       status: 'scheduled',
-      serviceType: 'direct' // Explicitly set serviceType for patient appointments
+      serviceType: serviceType || 'direct', // Use provided serviceType or default to 'direct'
+      teamId: teamId // Add the patient's team to the appointment
     });
     
     console.log('Appointment created:', {
@@ -553,39 +568,31 @@ const updateAppointment = async (req, res) => {
       return res.status(404).json({ message: 'Appointment not found' });
     }
     
-    // Check for scheduling conflicts if time is changed
+    // Check for scheduling conflicts if time or therapist is changed
     if ((startTime && startTime !== appointment.startTime.toISOString()) || 
-        (endTime && endTime !== appointment.endTime.toISOString())) {
+        (endTime && endTime !== appointment.endTime.toISOString()) ||
+        (therapistId && therapistId !== appointment.therapistId)) {
         
-      const newTherapistId = therapistId || appointment.therapistId;
-      
-      const conflictingAppointment = await Appointment.findOne({
-        where: {
-          id: { [Op.ne]: id }, // Exclude the current appointment
-          therapistId: newTherapistId,
-          [Op.or]: [
-            {
-              startTime: {
-                [Op.between]: [
-                  new Date(startTime || appointment.startTime),
-                  new Date(endTime || appointment.endTime)
-                ]
-              }
-            },
-            {
-              endTime: {
-                [Op.between]: [
-                  new Date(startTime || appointment.startTime),
-                  new Date(endTime || appointment.endTime)
-                ]
-              }
-            }
-          ]
-        }
-      });
-      
-      if (conflictingAppointment) {
-        return res.status(409).json({ message: 'This time slot conflicts with an existing appointment' });
+      // Enhanced conflict detection for appointment updates
+      const validation = await validateAppointment({
+        patientId: appointment.patientId,
+        therapistId: therapistId || appointment.therapistId,
+        startTime: new Date(startTime || appointment.startTime),
+        endTime: new Date(endTime || appointment.endTime)
+      }, id); // Pass appointment ID to exclude from conflict check
+
+      if (!validation.isValid) {
+        return res.status(409).json({ 
+          message: 'Appointment update conflicts detected',
+          errors: validation.errors,
+          conflicts: validation.conflicts,
+          warnings: validation.warnings
+        });
+      }
+
+      // Log warnings if any (non-blocking)
+      if (validation.warnings.length > 0) {
+        console.log('Appointment update warnings:', validation.warnings);
       }
     }
     
@@ -636,37 +643,26 @@ const updateAppointmentTherapist = async (req, res) => {
         return res.status(404).json({ message: 'Therapist not found' });
       }
       
-      // Check for scheduling conflicts
-      const conflictingAppointment = await Appointment.findOne({
-        where: {
-          id: { [Op.ne]: id },
-          therapistId: therapistId,
-          [Op.or]: [
-            {
-              startTime: {
-                [Op.between]: [appointment.startTime, appointment.endTime]
-              }
-            },
-            {
-              endTime: {
-                [Op.between]: [appointment.startTime, appointment.endTime]
-              }
-            },
-            {
-              [Op.and]: [
-                { startTime: { [Op.lte]: appointment.startTime } },
-                { endTime: { [Op.gte]: appointment.endTime } }
-              ]
-            }
-          ]
-        }
-      });
-      
-      if (conflictingAppointment) {
+      // Enhanced conflict detection for therapist assignment
+      const validation = await validateAppointment({
+        patientId: appointment.patientId,
+        therapistId: therapistId,
+        startTime: appointment.startTime,
+        endTime: appointment.endTime
+      }, id); // Exclude current appointment from conflict check
+
+      if (!validation.isValid) {
         return res.status(409).json({ 
-          message: 'Therapist has a conflicting appointment at this time',
-          conflict: conflictingAppointment
+          message: 'Therapist assignment conflicts detected',
+          errors: validation.errors,
+          conflicts: validation.conflicts,
+          warnings: validation.warnings
         });
+      }
+
+      // Log warnings if any (non-blocking)
+      if (validation.warnings.length > 0) {
+        console.log('Therapist assignment warnings:', validation.warnings);
       }
     }
     
@@ -815,16 +811,15 @@ const getTeamSchedule = async (req, res) => {
         ]
       });
     } else if (isBcba) {
-      // BCBA can only see their own team
+      // BCBA can see all teams in their organization
       teams = await Team.findAll({
-        where: { leadBcbaId: userId },
         include: [
           {
             model: User,
             as: 'LeadBCBA',
             attributes: ['id', 'firstName', 'lastName'],
             where: req.user.organizationId ? { organizationId: req.user.organizationId } : {},
-            required: false
+            required: true // Require lead BCBA to be from same organization
           },
           {
             model: User,
@@ -940,8 +935,16 @@ const getTeamSchedule = async (req, res) => {
       usersMap[user.id] = user;
     });
     
+    // Add permission info to teams
+    const teamsWithPermissions = teams.map(team => ({
+      ...team.toJSON(),
+      isManaged: team.leadBcbaId === userId, // Current user manages this team
+      canEdit: isAdmin || team.leadBcbaId === userId // Can edit if admin or team lead
+    }));
+    
     return res.status(200).json({
-      teams,
+      teams: teamsWithPermissions,
+      currentUserId: userId,
       appointments: appointments.map(appt => {
         const therapist = usersMap[appt.therapistId];
         const bcba = usersMap[appt.bcbaId];

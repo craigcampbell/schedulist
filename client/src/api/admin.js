@@ -8,9 +8,13 @@ export const getAdminDashboardSummary = async () => {
 
 // Get all users (with optional role filter)
 export const getUsers = async (role, active) => {
-  const response = await apiClient.get('/admin/users', {
-    params: { role, active }
-  });
+  // Don't send 'all' as a parameter to the backend
+  const params = { role };
+  if (active && active !== 'all') {
+    params.active = active;
+  }
+  
+  const response = await apiClient.get('/admin/users', { params });
   return response.data;
 };
 
@@ -37,6 +41,12 @@ export const deleteUser = async (id, deactivateOnly = true) => {
   const response = await apiClient.delete(`/admin/users/${id}`, {
     params: { deactivateOnly }
   });
+  return response.data;
+};
+
+// Invite a user to join the platform
+export const inviteUser = async (inviteData) => {
+  const response = await apiClient.post('/admin/users/invite', inviteData);
   return response.data;
 };
 
@@ -77,5 +87,11 @@ export const deleteLocation = async (id, deactivateOnly = true) => {
   const response = await apiClient.delete(`/admin/locations/${id}`, {
     params: { deactivateOnly }
   });
+  return response.data;
+};
+
+// Get audit logs
+export const getAuditLogs = async (params = {}) => {
+  const response = await apiClient.get('/admin/audit-logs', { params });
   return response.data;
 };

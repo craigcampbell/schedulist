@@ -11,6 +11,8 @@ import {
   updateBCBAAssignment,
   setPrimaryBCBA 
 } from '../../api/bcba';
+import { PlusIcon } from '@heroicons/react/24/outline';
+import PatientForm from '../../components/PatientForm';
 
 const PatientsPage = () => {
   const queryClient = useQueryClient();
@@ -19,6 +21,8 @@ const PatientsPage = () => {
   const { user } = useAuth();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPatient, setSelectedPatient] = useState(null);
+  const [showAddPatientForm, setShowAddPatientForm] = useState(false);
+  const [editingPatient, setEditingPatient] = useState(null);
   
   // Fetch patients with their assignments
   const { data: patients = [], isLoading: patientsLoading, error: patientsError } = useQuery({
@@ -178,15 +182,36 @@ const PatientsPage = () => {
           {filteredPatients.map(patient => (
             <div 
               key={patient.id}
-              className={`bg-white p-4 rounded-lg shadow hover:shadow-md transition-shadow ${
+              className={`bg-white p-4 rounded-lg shadow hover:shadow-md transition-shadow border-2 ${
                 selectedPatient?.id === patient.id ? 'ring-2 ring-blue-500' : ''
               }`}
+              style={{ borderColor: patient.color || '#6B7280' }}
             >
-              <h3 className="text-lg font-medium">{patient.firstName} {patient.lastName}</h3>
-              <p className="text-sm text-gray-500">ID: {patient.id}</p>
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-lg font-medium">{patient.firstName} {patient.lastName}</h3>
+                  <p className="text-sm text-gray-500">ID: {patient.id}</p>
+                </div>
+                <div 
+                  className="w-6 h-6 rounded-full border border-gray-300"
+                  style={{ backgroundColor: patient.color || '#6B7280' }}
+                  title="Patient color"
+                />
+              </div>
               <p className="text-sm text-gray-500">
                 Primary BCBA: {patient.primaryBCBA ? patient.primaryBCBA.name : 'None'}
               </p>
+              {patient.team && (
+                <div className="mt-1 flex items-center gap-2">
+                  <span className="text-xs text-gray-600">Team:</span>
+                  <span 
+                    className="text-xs px-2 py-1 rounded-full text-white font-medium"
+                    style={{ backgroundColor: patient.team.color || '#6B7280' }}
+                  >
+                    {patient.team.name}
+                  </span>
+                </div>
+              )}
               <div className="mt-2">
                 <p className="text-xs font-medium text-gray-600">Assigned Therapists</p>
                 {patient.therapists && patient.therapists.length > 0 ? (
@@ -220,18 +245,24 @@ const PatientsPage = () => {
               <div className="mt-4 flex gap-2">
                 <button
                   onClick={() => handlePatientClick(patient)}
-                  className="flex-1 bg-blue-500 text-white px-3 py-2 rounded text-sm hover:bg-blue-600 transition-colors"
+                  className="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 transition-colors"
                 >
                   View Schedule
+                </button>
+                <button
+                  onClick={() => setEditingPatient(patient)}
+                  className="bg-green-500 text-white px-3 py-1 rounded text-xs hover:bg-green-600 transition-colors"
+                >
+                  Edit
                 </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     setSelectedPatient(patient);
                   }}
-                  className="flex-1 bg-gray-500 text-white px-3 py-2 rounded text-sm hover:bg-gray-600 transition-colors"
+                  className="bg-gray-500 text-white px-3 py-1 rounded text-xs hover:bg-gray-600 transition-colors"
                 >
-                  Manage Assignments
+                  Assignments
                 </button>
               </div>
             </div>
@@ -375,6 +406,22 @@ const PatientsPage = () => {
             </div>
           </div>
         </div>
+      )}
+      
+      {/* Add/Edit Patient Form Modal */}
+      {(showAddPatientForm || editingPatient) && (
+        <PatientForm
+          patient={editingPatient}
+          onClose={() => {
+            setShowAddPatientForm(false);
+            setEditingPatient(null);
+          }}
+          onSuccess={() => {
+            setShowAddPatientForm(false);
+            setEditingPatient(null);
+            queryClient.invalidateQueries(['patients-with-assignments']);
+          }}
+        />
       )}
     </div>
   );

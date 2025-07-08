@@ -1,6 +1,7 @@
 const express = require('express');
 const { check, validationResult } = require('express-validator');
 const adminController = require('../controllers/admin.controller');
+const teamController = require('../controllers/team.controller');
 const { verifyToken, isAdmin } = require('../middleware/auth.middleware');
 
 const router = express.Router();
@@ -20,6 +21,9 @@ router.use(verifyToken, isAdmin);
 // Get admin dashboard summary
 router.get('/dashboard', adminController.getDashboardSummary);
 
+// Audit log routes
+router.get('/audit-logs', adminController.getAuditLogs);
+
 // User management routes
 router.get('/users', adminController.getAllUsers);
 router.get('/users/:id', adminController.getUserById);
@@ -37,6 +41,15 @@ router.post(
 );
 router.put('/users/:id', adminController.updateUser);
 router.delete('/users/:id', adminController.deleteUser);
+router.post(
+  '/users/invite',
+  [
+    check('email', 'Please include a valid email').isEmail(),
+    check('role', 'Role is required').not().isEmpty(),
+  ],
+  validate,
+  adminController.inviteUser
+);
 
 // Location management routes
 router.get('/locations', adminController.getAllLocations);
@@ -54,5 +67,13 @@ router.post(
 );
 router.put('/locations/:id', adminController.updateLocation);
 router.delete('/locations/:id', adminController.deleteLocation);
+
+// Team management routes
+router.get('/teams', teamController.getTeams);
+router.post('/teams', teamController.createTeam);
+router.put('/teams/:id', teamController.updateTeam);
+router.post('/teams/:id/members', teamController.addTeamMember);
+router.delete('/teams/:id/members/:memberId', teamController.removeTeamMember);
+router.delete('/teams/:id', teamController.deleteTeam);
 
 module.exports = router;

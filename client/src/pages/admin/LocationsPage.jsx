@@ -3,8 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit, Trash, Check, X, MapPin, Clock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { getLocations, createLocation, updateLocation, deleteLocation } from '../../api/admin';
+import { useModal } from '../../context/modal-context';
 
 const AdminLocationsPage = () => {
+  const modal = useModal();
   const [showAddForm, setShowAddForm] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState(null);
@@ -164,7 +166,13 @@ const AdminLocationsPage = () => {
   
   // Handle delete button click
   const handleDelete = async (locationId) => {
-    if (window.confirm('Are you sure you want to delete this location?')) {
+    const location = locations?.find(loc => loc.id === locationId);
+    const confirmed = await modal.confirmDelete(
+      location?.name || 'this location',
+      'Are you sure you want to delete this location? This action cannot be undone.'
+    );
+    
+    if (confirmed) {
       try {
         await deleteLocationMutation.mutateAsync(locationId);
       } catch (error) {

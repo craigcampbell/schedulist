@@ -17,13 +17,15 @@ import {
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { validateTherapistLunchBreak } from '../../utils/lunch-scheduler';
+import { getAppointmentType, getAppointmentColors, getAppointmentDisplayLabel } from '../../utils/appointmentTypes';
 
 // Time slots matching the Excel format (7:30 AM to 5:30 PM)
 const TIME_SLOTS = [
-  "7:30-8:00", "8:00-8:30", "8:30-9:00", "9:00-9:30", "9:30-10:00", 
-  "10:00-10:30", "10:30-11:00", "11:00-11:30", "11:30-12:00", "12:00-12:30", 
-  "12:30-1:00", "1:00-1:30", "1:30-2:00", "2:00-2:30", "2:30-3:00", 
-  "3:00-3:30", "3:30-4:00", "4:00-4:30", "4:30-5:00", "5:00-5:30"
+  "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM", 
+  "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM", "12:00 PM", 
+  "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", 
+  "3:00 PM", "3:30 PM", "4:00 PM", "4:30 PM", "5:00 PM", 
+  "5:30 PM"
 ];
 
 // Service type colors matching therapist workflow
@@ -36,18 +38,6 @@ const SERVICE_COLORS = {
   cleaning: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-200 border-orange-300',
   circle: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-200 border-yellow-300'
 };
-
-// Patient assignment colors for easy identification
-const PATIENT_COLORS = [
-  'bg-rose-50 border-rose-200 text-rose-800',
-  'bg-sky-50 border-sky-200 text-sky-800', 
-  'bg-emerald-50 border-emerald-200 text-emerald-800',
-  'bg-amber-50 border-amber-200 text-amber-800',
-  'bg-violet-50 border-violet-200 text-violet-800',
-  'bg-teal-50 border-teal-200 text-teal-800',
-  'bg-pink-50 border-pink-200 text-pink-800',
-  'bg-indigo-50 border-indigo-200 text-indigo-800'
-];
 
 export default function ExcelScheduleGrid({
   teams = [],
@@ -62,14 +52,6 @@ export default function ExcelScheduleGrid({
   const [expandedTeams, setExpandedTeams] = useState({});
   const [selectedView, setSelectedView] = useState(viewMode);
   const [showValidationWarnings, setShowValidationWarnings] = useState(true);
-  const [patientColors] = useState(() => {
-    // Create consistent patient color mapping
-    const colorMap = {};
-    patients.forEach((patient, index) => {
-      colorMap[patient.id] = PATIENT_COLORS[index % PATIENT_COLORS.length];
-    });
-    return colorMap;
-  });
 
   // Format patient name based on user role (matching Excel format)
   const formatPatientName = (patient) => {
@@ -94,11 +76,35 @@ export default function ExcelScheduleGrid({
     );
   }, [appointments, selectedDate]);
 
+  // Time slot mapping for time calculations
+  const TIME_SLOT_RANGES = {
+    "7:30 AM": { start: 7.5 * 60, end: 8 * 60 },
+    "8:00 AM": { start: 8 * 60, end: 8.5 * 60 },
+    "8:30 AM": { start: 8.5 * 60, end: 9 * 60 },
+    "9:00 AM": { start: 9 * 60, end: 9.5 * 60 },
+    "9:30 AM": { start: 9.5 * 60, end: 10 * 60 },
+    "10:00 AM": { start: 10 * 60, end: 10.5 * 60 },
+    "10:30 AM": { start: 10.5 * 60, end: 11 * 60 },
+    "11:00 AM": { start: 11 * 60, end: 11.5 * 60 },
+    "11:30 AM": { start: 11.5 * 60, end: 12 * 60 },
+    "12:00 PM": { start: 12 * 60, end: 12.5 * 60 },
+    "12:30 PM": { start: 12.5 * 60, end: 13 * 60 },
+    "1:00 PM": { start: 13 * 60, end: 13.5 * 60 },
+    "1:30 PM": { start: 13.5 * 60, end: 14 * 60 },
+    "2:00 PM": { start: 14 * 60, end: 14.5 * 60 },
+    "2:30 PM": { start: 14.5 * 60, end: 15 * 60 },
+    "3:00 PM": { start: 15 * 60, end: 15.5 * 60 },
+    "3:30 PM": { start: 15.5 * 60, end: 16 * 60 },
+    "4:00 PM": { start: 16 * 60, end: 16.5 * 60 },
+    "4:30 PM": { start: 16.5 * 60, end: 17 * 60 },
+    "5:00 PM": { start: 17 * 60, end: 17.5 * 60 },
+    "5:30 PM": { start: 17.5 * 60, end: 18 * 60 }
+  };
+
   // Check if appointment overlaps with time slot
   const isAppointmentInTimeSlot = (appointment, timeSlot) => {
-    const [slotStart, slotEnd] = timeSlot.split('-');
-    const slotStartTime = parseTimeToMinutes(slotStart);
-    const slotEndTime = parseTimeToMinutes(slotEnd);
+    const slotRange = TIME_SLOT_RANGES[timeSlot];
+    if (!slotRange) return false;
     
     const appStart = new Date(appointment.startTime);
     const appEnd = new Date(appointment.endTime);
@@ -107,16 +113,10 @@ export default function ExcelScheduleGrid({
     const appEndMinutes = appEnd.getHours() * 60 + appEnd.getMinutes();
     
     return (
-      (appStartMinutes >= slotStartTime && appStartMinutes < slotEndTime) ||
-      (appEndMinutes > slotStartTime && appEndMinutes <= slotEndTime) ||
-      (appStartMinutes <= slotStartTime && appEndMinutes >= slotEndTime)
+      (appStartMinutes >= slotRange.start && appStartMinutes < slotRange.end) ||
+      (appEndMinutes > slotRange.start && appEndMinutes <= slotRange.end) ||
+      (appStartMinutes <= slotRange.start && appEndMinutes >= slotRange.end)
     );
-  };
-
-  // Convert time string to minutes for comparison
-  const parseTimeToMinutes = (timeStr) => {
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    return hours * 60 + minutes;
   };
 
   // Validate therapist schedules for warnings using the lunch scheduler utility
@@ -153,22 +153,27 @@ export default function ExcelScheduleGrid({
     }
 
     const serviceType = appointment.serviceType || 'direct';
+    const appointmentType = getAppointmentType(serviceType);
+    const colors = getAppointmentColors(serviceType);
     const isPatientSession = appointment.patientId && serviceType === 'direct';
     
     if (isPatientSession) {
-      const patientName = formatPatientName(appointment.patient);
-      const colorClass = patientColors[appointment.patientId] || PATIENT_COLORS[0];
+      // Look up patient data if not included in appointment
+      const patient = appointment.patient || patients.find(p => p.id === appointment.patientId);
+      const patientName = formatPatientName(patient);
+      const patientColor = patient?.color || '#6B7280';
       
       return (
         <div 
-          className={cn(
-            "w-full h-full p-1 rounded border-2 cursor-pointer hover:shadow-sm transition-all",
-            colorClass
-          )}
+          className="w-full h-full p-1 rounded border-2 cursor-pointer hover:shadow-sm transition-all bg-white dark:bg-gray-800"
+          style={{ 
+            borderColor: patientColor,
+            backgroundColor: `${patientColor}15` // 15 is hex for ~9% opacity
+          }}
           onClick={() => onAppointmentClick(appointment)}
-          title={`${formatFullPatientName(appointment.patient)} - ${format(new Date(appointment.startTime), 'h:mm a')} to ${format(new Date(appointment.endTime), 'h:mm a')}`}
+          title={`${formatFullPatientName(patient)} - ${format(new Date(appointment.startTime), 'h:mm a')} to ${format(new Date(appointment.endTime), 'h:mm a')}`}
         >
-          <div className="text-xs font-semibold text-center leading-tight">
+          <div className="text-xs font-semibold text-center leading-tight" style={{ color: patientColor }}>
             {patientName}
           </div>
         </div>
@@ -177,15 +182,18 @@ export default function ExcelScheduleGrid({
       return (
         <div 
           className={cn(
-            "w-full h-full p-1 rounded border cursor-pointer hover:shadow-sm transition-all",
-            SERVICE_COLORS[serviceType] || SERVICE_COLORS.indirect
+            "w-full h-full p-1 rounded border-2 cursor-pointer transition-all",
+            colors.bg,
+            colors.text,
+            colors.border,
+            colors.hover
           )}
           onClick={() => onAppointmentClick(appointment)}
-          title={`${serviceType.toUpperCase()} - ${format(new Date(appointment.startTime), 'h:mm a')} to ${format(new Date(appointment.endTime), 'h:mm a')}`}
+          title={`${appointmentType.label} - ${format(new Date(appointment.startTime), 'h:mm a')} to ${format(new Date(appointment.endTime), 'h:mm a')}`}
         >
-          <div className="text-xs font-medium text-center leading-tight">
-            {serviceType === 'lunch' && <Coffee className="h-3 w-3 mx-auto" />}
-            {serviceType !== 'lunch' && serviceType.toUpperCase()}
+          <div className="text-xs font-medium text-center leading-tight flex items-center justify-center gap-1">
+            <span>{appointmentType.icon}</span>
+            <span>{appointment.title || appointmentType.label}</span>
           </div>
         </div>
       );

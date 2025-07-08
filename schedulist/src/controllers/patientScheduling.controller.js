@@ -9,6 +9,7 @@ const {
   Appointment 
 } = require('../models');
 const { Op } = require('sequelize');
+const { validateAppointment, checkPatientTherapistConflicts } = require('../utils/conflictDetection');
 
 /**
  * Create a patient schedule template
