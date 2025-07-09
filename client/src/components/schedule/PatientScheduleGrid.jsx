@@ -23,6 +23,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { analyzeTherapistContinuity, calculateContinuityScore } from '../../utils/continuity-tracker';
 import { getAppointmentType, getAppointmentColors } from '../../utils/appointmentTypes';
+import { groupConsecutiveAppointments } from '../../utils/appointment-grouping';
 
 // Time slots matching the Excel format
 const TIME_SLOTS = [

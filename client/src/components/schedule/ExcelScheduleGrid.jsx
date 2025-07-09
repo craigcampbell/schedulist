@@ -18,6 +18,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { validateTherapistLunchBreak } from '../../utils/lunch-scheduler';
 import { getAppointmentType, getAppointmentColors, getAppointmentDisplayLabel } from '../../utils/appointmentTypes';
+import { groupConsecutiveAppointments } from '../../utils/appointment-grouping';
 
 // Time slots matching the Excel format (7:30 AM to 5:30 PM)
 const TIME_SLOTS = [
@@ -132,49 +133,131 @@ export default function ExcelScheduleGrid({
     };
   };
 
-  // Get appointment for specific therapist and time slot
-  const getAppointmentForSlot = (therapistId, timeSlot) => {
-    return todaysAppointments.find(app => 
-      app.therapistId === therapistId && isAppointmentInTimeSlot(app, timeSlot)
-    );
+  // Calculate how many 30-minute slots an appointment spans
+  const calculateAppointmentSpan = (appointment) => {
+    const start = new Date(appointment.startTime);
+    const end = new Date(appointment.endTime);
+    const durationMinutes = (end - start) / (1000 * 60);
+    const span = Math.ceil(durationMinutes / 30);
+    return span;
   };
 
-  // Render cell content based on appointment
-  const renderCellContent = (appointment, timeSlot, therapistId) => {
-    if (!appointment) {
+  // Get the starting slot index for an appointment
+  const getAppointmentStartSlotIndex = (appointment) => {
+    const start = new Date(appointment.startTime);
+    const startMinutes = start.getHours() * 60 + start.getMinutes();
+    
+    const index = TIME_SLOTS.findIndex(slot => {
+      const slotRange = TIME_SLOT_RANGES[slot];
+      return slotRange && startMinutes >= slotRange.start && startMinutes < slotRange.end;
+    });
+    return index;
+  };
+
+  // Get appointments grouped by therapist
+  const getTherapistAppointmentGroups = (therapistId) => {
+    const therapistApps = todaysAppointments.filter(app => app.therapistId === therapistId);
+    const sortedApps = therapistApps.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+    return groupConsecutiveAppointments(sortedApps);
+  };
+
+  // Check if a slot is occupied by an appointment group
+  const getAppointmentGroupForSlot = (therapistId, slotIndex) => {
+    const groups = getTherapistAppointmentGroups(therapistId);
+    
+    for (const group of groups) {
+      const startIndex = getAppointmentStartSlotIndex(group);
+      const span = calculateAppointmentSpan(group);
+      
+      if (slotIndex >= startIndex && slotIndex < startIndex + span) {
+        return {
+          group,
+          isStart: slotIndex === startIndex,
+          relativeIndex: slotIndex - startIndex,
+          totalSpan: span
+        };
+      }
+    }
+    
+    return null;
+  };
+
+  // Render cell content based on appointment group
+  const renderCellContent = (groupInfo, slotIndex, therapistId, teamId, leadBcbaId) => {
+    if (!groupInfo) {
       return (
         <div 
           className="w-full h-full flex items-center justify-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50"
-          onClick={() => onCellClick({ therapistId, timeSlot, selectedDate })}
+          onClick={() => {
+            // Convert time slot to expected format "7:30-8:00 AM"
+            const currentSlot = TIME_SLOTS[slotIndex];
+            const nextSlot = TIME_SLOTS[slotIndex + 1] || "6:00 PM";
+            const timeSlotFormatted = `${currentSlot.replace(' AM', '').replace(' PM', '')}-${nextSlot}`;
+            
+            onCellClick({ 
+              therapistId, 
+              timeSlot: timeSlotFormatted, 
+              selectedDate,
+              teamId,
+              leadBcbaId
+            });
+          }}
         >
           <Plus className="h-3 w-3 text-gray-400 opacity-0 group-hover:opacity-100" />
         </div>
       );
     }
 
-    const serviceType = appointment.serviceType || 'direct';
+    // Don't render anything for slots that are not the start of the appointment
+    if (!groupInfo.isStart) {
+      return null;
+    }
+
+    const { group, totalSpan } = groupInfo;
+    const serviceType = group.serviceType || 'direct';
     const appointmentType = getAppointmentType(serviceType);
     const colors = getAppointmentColors(serviceType);
-    const isPatientSession = appointment.patientId && serviceType === 'direct';
+    const isPatientSession = group.patientId && serviceType === 'direct';
+    
+    // Calculate the height based on how many slots it spans
+    const heightStyle = {
+      height: `${totalSpan * 40 - 4}px`, // 40px per slot minus padding
+      position: 'absolute',
+      top: '2px',
+      left: '2px',
+      right: '2px',
+      zIndex: 10
+    };
     
     if (isPatientSession) {
       // Look up patient data if not included in appointment
-      const patient = appointment.patient || patients.find(p => p.id === appointment.patientId);
+      const patient = group.patient || patients.find(p => p.id === group.patientId);
       const patientName = formatPatientName(patient);
       const patientColor = patient?.color || '#6B7280';
       
       return (
         <div 
-          className="w-full h-full p-1 rounded border-2 cursor-pointer hover:shadow-sm transition-all bg-white dark:bg-gray-800"
+          className="p-2 rounded-lg border-2 cursor-pointer hover:shadow-md transition-all bg-white dark:bg-gray-800"
           style={{ 
+            ...heightStyle,
             borderColor: patientColor,
             backgroundColor: `${patientColor}15` // 15 is hex for ~9% opacity
           }}
-          onClick={() => onAppointmentClick(appointment)}
-          title={`${formatFullPatientName(patient)} - ${format(new Date(appointment.startTime), 'h:mm a')} to ${format(new Date(appointment.endTime), 'h:mm a')}`}
+          onClick={() => onAppointmentClick(group.appointments[0])}
+          title={`${formatFullPatientName(patient)} - ${format(new Date(group.startTime), 'h:mm a')} to ${format(new Date(group.endTime), 'h:mm a')}`}
         >
-          <div className="text-xs font-semibold text-center leading-tight" style={{ color: patientColor }}>
-            {patientName}
+          <div className="flex flex-col h-full">
+            <div className="text-xs font-semibold" style={{ color: patientColor }}>
+              {patientName}
+            </div>
+            <div className="text-xs opacity-75 mt-1" style={{ color: patientColor }}>
+              {format(new Date(group.startTime), 'h:mm')} - {format(new Date(group.endTime), 'h:mm a')}
+            </div>
+            {group.appointments.length > 1 && (
+              <div className="text-xs opacity-60 mt-auto" style={{ color: patientColor }}>
+                {group.appointments.length} sessions
+              </div>
+            )}
           </div>
         </div>
       );
@@ -182,18 +265,24 @@ export default function ExcelScheduleGrid({
       return (
         <div 
           className={cn(
-            "w-full h-full p-1 rounded border-2 cursor-pointer transition-all",
+            "p-2 rounded-lg border-2 cursor-pointer transition-all",
             colors.bg,
             colors.text,
             colors.border,
             colors.hover
           )}
-          onClick={() => onAppointmentClick(appointment)}
-          title={`${appointmentType.label} - ${format(new Date(appointment.startTime), 'h:mm a')} to ${format(new Date(appointment.endTime), 'h:mm a')}`}
+          style={heightStyle}
+          onClick={() => onAppointmentClick(group.appointments[0])}
+          title={`${appointmentType.label} - ${format(new Date(group.startTime), 'h:mm a')} to ${format(new Date(group.endTime), 'h:mm a')}`}
         >
-          <div className="text-xs font-medium text-center leading-tight flex items-center justify-center gap-1">
-            <span>{appointmentType.icon}</span>
-            <span>{appointment.title || appointmentType.label}</span>
+          <div className="flex flex-col h-full items-center justify-center text-center">
+            <div className="text-sm font-medium flex items-center gap-1">
+              <span>{appointmentType.icon}</span>
+              <span>{group.title || appointmentType.label}</span>
+            </div>
+            <div className="text-xs opacity-75 mt-1">
+              {format(new Date(group.startTime), 'h:mm')} - {format(new Date(group.endTime), 'h:mm a')}
+            </div>
           </div>
         </div>
       );
@@ -367,13 +456,13 @@ export default function ExcelScheduleGrid({
                         
                         {/* Therapist cells */}
                         {teamMembers.map(member => {
-                          const appointment = getAppointmentForSlot(member.id, timeSlot);
+                          const groupInfo = getAppointmentGroupForSlot(member.id, slotIndex);
                           return (
                             <div 
                               key={member.id}
-                              className="p-2 border-r border-gray-200 dark:border-gray-700 min-h-[60px] flex items-center justify-center group relative"
+                              className="border-r border-gray-200 dark:border-gray-700 h-[40px] relative"
                             >
-                              {renderCellContent(appointment, timeSlot, member.id)}
+                              {renderCellContent(groupInfo, slotIndex, member.id, team.id, team.LeadBCBA?.id)}
                             </div>
                           );
                         })}

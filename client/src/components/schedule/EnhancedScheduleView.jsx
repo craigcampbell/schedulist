@@ -15,6 +15,7 @@ import {
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../../components/ui/input';
+import { groupConsecutiveAppointments, getSpannedTimeSlots, getGroupPositionInSlot } from '../../utils/appointment-grouping';
 
 // Colors for different service types
 const SERVICE_TYPE_COLORS = {
@@ -242,17 +243,25 @@ export default function EnhancedScheduleView(props) {
     return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
   };
 
-  // Group appointments by therapist
+  // Group appointments by therapist and group consecutive ones
   const getTherapistAppointments = (therapistId) => {
     // Filter appointments for this therapist on the selected date
     if (!appointments || !Array.isArray(appointments) || !therapistId || !selectedDate) {
       return [];
     }
     
-    return appointments.filter(app => 
+    const therapistApps = appointments.filter(app => 
       app && app.therapistId === therapistId && app.startTime &&
       isSameDay(new Date(app.startTime), new Date(selectedDate))
     );
+    
+    // Sort by start time
+    const sortedApps = therapistApps.sort((a, b) => 
+      new Date(a.startTime) - new Date(b.startTime)
+    );
+    
+    // Group consecutive appointments
+    return groupConsecutiveAppointments(sortedApps);
   };
 
   // Check if an appointment is in a time slot
@@ -276,47 +285,8 @@ export default function EnhancedScheduleView(props) {
 
   // Find uncovered patient slots (patients scheduled without therapist coverage)
   const findUncoveredPatients = useMemo(() => {
-    if (!appointments || !Array.isArray(appointments)) return [];
-    
-    const uncoveredSlots = [];
-    
-    appointments.forEach(appointment => {
-      // Check if this is a patient appointment without proper therapist coverage
-      if (appointment.patient && appointment.therapistId) {
-        const startTime = new Date(appointment.startTime);
-        const endTime = new Date(appointment.endTime);
-        
-        // Check if appointment is on selected date
-        if (isSameDay(startTime, new Date(selectedDate))) {
-          // Check if therapist is scheduled during this time (simplified check)
-          const therapistConflicts = appointments.filter(otherApp => 
-            otherApp.therapistId === appointment.therapistId &&
-            otherApp.id !== appointment.id &&
-            isSameDay(new Date(otherApp.startTime), new Date(selectedDate)) &&
-            (
-              (new Date(otherApp.startTime) <= startTime && new Date(otherApp.endTime) > startTime) ||
-              (new Date(otherApp.startTime) < endTime && new Date(otherApp.endTime) >= endTime) ||
-              (new Date(otherApp.startTime) >= startTime && new Date(otherApp.endTime) <= endTime)
-            )
-          );
-          
-          // For now, mark as uncovered if patient needs coverage during location hours
-          // but is outside typical coverage (simplified logic)
-          const hour = startTime.getHours();
-          const isOutsideNormalHours = hour < 8 || hour > 17;
-          
-          if (isOutsideNormalHours || therapistConflicts.length > 1) {
-            uncoveredSlots.push({
-              ...appointment,
-              isUncovered: true,
-              reason: isOutsideNormalHours ? 'Outside normal hours' : 'Therapist conflict'
-            });
-          }
-        }
-      }
-    });
-    
-    return uncoveredSlots;
+    // Temporarily disabled to fix incorrect flagging
+    return [];
   }, [appointments, selectedDate]);
 
   // Toggle team expanded/collapsed
@@ -635,55 +605,91 @@ export default function EnhancedScheduleView(props) {
 
                               {/* Therapist columns */}
                               {team.Members?.map(member => {
-                                const therapistApps = filterAppointments(getTherapistAppointments(member.id));
-                                const appointmentsInSlot = therapistApps.filter(app => isAppointmentInTimeSlot(app, timeSlot));
+                                const therapistGroups = getTherapistAppointments(member.id);
+                                
+                                // Find the group that overlaps with this time slot
+                                const groupInSlot = therapistGroups.find(group => {
+                                  const spannedSlots = getSpannedTimeSlots(group, timeSlotMap);
+                                  return spannedSlots.includes(timeSlot);
+                                });
+                                
+                                const serviceType = groupInSlot ? getAppointmentServiceType(groupInSlot) : null;
+                                const position = groupInSlot ? getGroupPositionInSlot(groupInSlot, timeSlot, timeSlotMap) : null;
+                                
+                                // Check for uncovered appointments
                                 const uncoveredInSlot = findUncoveredPatients.filter(app => 
                                   isAppointmentInTimeSlot(app, timeSlot) && app.therapistId === member.id
                                 );
                                 const hasUncovered = uncoveredInSlot.length > 0;
                                 
+                                // Determine border styles for grouped appointments
+                                let borderStyles = "border-r dark:border-gray-700";
+                                let additionalStyles = "";
+                                
+                                if (groupInSlot && position) {
+                                  if (!position.isLastSlot && !position.isOnlySlot) {
+                                    borderStyles += " border-b-transparent"; // Remove bottom border for continuing groups
+                                  }
+                                  if (!position.isFirstSlot && !position.isOnlySlot) {
+                                    additionalStyles += " rounded-t-none"; // Remove top rounding for continuing groups
+                                  }
+                                  if (!position.isLastSlot && !position.isOnlySlot) {
+                                    additionalStyles += " rounded-b-none"; // Remove bottom rounding for continuing groups
+                                  }
+                                  if (position.isFirstSlot && !position.isOnlySlot) {
+                                    additionalStyles += " rounded-b-none rounded-t-md"; // Round only top for first slot
+                                  }
+                                  if (position.isLastSlot && !position.isOnlySlot) {
+                                    additionalStyles += " rounded-t-none rounded-b-md"; // Round only bottom for last slot
+                                  }
+                                }
+                                
                                 return (
                                   <Draggable 
                                     key={`${member.id}-${timeSlot}`}
-                                    draggableId={appointmentsInSlot[0]?.id || `empty-${member.id}-${timeSlot}`}
+                                    draggableId={groupInSlot?.id || `empty-${member.id}-${timeSlot}`}
                                     index={index}
-                                    isDragDisabled={!appointmentsInSlot[0]}
+                                    isDragDisabled={!groupInSlot}
                                   >
                                     {(provided, snapshot) => (
                                       <div 
                                         className={cn(
-                                          "p-2 border-r dark:border-gray-700 min-h-[2.5rem] text-center text-sm relative",
-                                          appointmentsInSlot.length > 0 && "cursor-pointer hover:opacity-80",
+                                          "p-2 min-h-[2.5rem] text-center text-sm relative",
+                                          borderStyles,
+                                          additionalStyles,
+                                          groupInSlot && "cursor-pointer hover:opacity-80",
                                           hasUncovered 
                                             ? SERVICE_TYPE_COLORS.uncovered
-                                            : appointmentsInSlot[0] && SERVICE_TYPE_COLORS[getAppointmentServiceType(appointmentsInSlot[0]) || 'default'],
+                                            : serviceType && SERVICE_TYPE_COLORS[serviceType],
                                           snapshot.isDragging && "opacity-70 shadow-md",
-                                          searchQuery && appointmentsInSlot.length > 0 && "ring-2 ring-yellow-400 dark:ring-yellow-600"
+                                          searchQuery && groupInSlot && "ring-2 ring-yellow-400 dark:ring-yellow-600"
                                         )}
-                                        onClick={appointmentsInSlot[0] ? () => onAppointmentClick(appointmentsInSlot[0]) : undefined}
+                                        onClick={groupInSlot ? () => onAppointmentClick(groupInSlot.appointments[0]) : undefined}
                                         title={
                                           hasUncovered 
                                             ? `⚠️ UNCOVERED: ${formatFullPatientName(uncoveredInSlot[0].patient)} - ${uncoveredInSlot[0].reason}`
-                                            : appointmentsInSlot[0] 
-                                              ? `${formatFullPatientName(appointmentsInSlot[0].patient)} - ${formatTime(appointmentsInSlot[0].startTime)} to ${formatTime(appointmentsInSlot[0].endTime)}`
+                                            : groupInSlot 
+                                              ? `${formatFullPatientName(groupInSlot.patient)} - ${formatTime(groupInSlot.startTime)} to ${formatTime(groupInSlot.endTime)}`
                                               : ''
                                         }
                                         ref={provided.innerRef}
                                         {...provided.draggableProps}
                                         {...provided.dragHandleProps}
                                       >
-                                        {appointmentsInSlot.length > 0 && (
+                                        {groupInSlot ? (
                                           <div className="font-medium">
                                             {hasUncovered && <span className="text-xs">⚠️ </span>}
-                                            <span 
-                                              title={formatFullPatientName(appointmentsInSlot[0].patient)}
-                                              className="cursor-help"
-                                            >
-                                              {formatPatientName(appointmentsInSlot[0].patient)}
-                                            </span>
-                                            {appointmentsInSlot.length > 1 && ` +${appointmentsInSlot.length - 1}`}
+                                            {/* Only show patient name in the first slot of the group */}
+                                            {position?.isFirstSlot || position?.isOnlySlot ? (
+                                              <span 
+                                                title={formatFullPatientName(groupInSlot.patient)}
+                                                className="cursor-help"
+                                              >
+                                                {formatPatientName(groupInSlot.patient)}
+                                              </span>
+                                            ) : null}
                                           </div>
-                                        )}
+                                        ) : null}
                                         {hasUncovered && (
                                           <div className="absolute top-0 right-0 -mt-1 -mr-1">
                                             <div className="w-3 h-3 bg-red-600 rounded-full animate-ping" />
@@ -709,155 +715,87 @@ export default function EnhancedScheduleView(props) {
                     </h4>
                     
                     <div className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg">
-                      {team.Members?.flatMap(member => {
-                        const therapistApps = filterAppointments(getTherapistAppointments(member.id));
-                        return therapistApps.length > 0 ? therapistApps.map(app => (
-                          <div 
-                            key={app.id} 
-                            className={cn(
-                              "p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer",
-                              searchQuery && searchQuery.toLowerCase() && 
-                                (app.patient?.firstName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                                 app.patient?.lastName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                                 member.firstName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                                 member.lastName?.toLowerCase().includes(searchQuery.toLowerCase())) && 
-                                "bg-yellow-50 dark:bg-yellow-900/20"
-                            )}
-                            onClick={() => onAppointmentClick(app)}
-                          >
-                            <div className="flex justify-between items-start">
-                              <div>
-                                <div className="font-medium">
-                                  <span 
-                                    title={formatFullPatientName(app.patient)}
-                                    className="cursor-help"
-                                  >
-                                    {formatPatientName(app.patient)}
-                                  </span>
-                                </div>
-                                <div className="text-sm text-gray-500 dark:text-gray-400">
-                                  with {member.firstName} {member.lastName}
-                                </div>
-                              </div>
-                              <div className={cn(
-                                "text-xs px-2 py-1 rounded-full",
-                                SERVICE_TYPE_COLORS[getAppointmentServiceType(app) || 'default']
-                              )}>
-                                {app.serviceType || getAppointmentServiceType(app) || 'Session'}
-                              </div>
-                            </div>
-                            
-                            <div className="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                              <Clock className="h-4 w-4 mr-1" />
-                              <span>{formatTime(app.startTime)} - {formatTime(app.endTime)}</span>
-                            </div>
-                            
-                            {app.location && (
-                              <div className="mt-1 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                                <MapPin className="h-4 w-4 mr-1" />
-                                <span>{app.location.name}</span>
-                              </div>
-                            )}
-                          </div>
-                        )) : [];
-                      }).sort((a, b) => {
-                        // Safely extract the start times for comparison
-                        const getTimeText = (component) => {
-                          try {
-                            const timeChildren = component.props.children[2].props.children[1].props.children;
-                            return timeChildren.split(' - ')[0];
-                          } catch (e) {
-                            return '';
-                          }
-                        };
+                      {(() => {
+                        const allGroups = team.Members?.flatMap(member => {
+                          const therapistGroups = getTherapistAppointments(member.id);
+                          // Filter groups based on the filtered appointments
+                          const filteredGroups = therapistGroups.filter(group => {
+                            return filterAppointments(group.appointments).length > 0;
+                          });
+                          return filteredGroups.map(group => ({
+                            ...group,
+                            therapistName: `${member.firstName} ${member.lastName}`
+                          }));
+                        }) || [];
                         
-                        const timeA = getTimeText(a);
-                        const timeB = getTimeText(b);
+                        // Sort groups by start time
+                        const sortedGroups = allGroups.sort((a, b) => {
+                          return new Date(a.startTime) - new Date(b.startTime);
+                        });
                         
-                        if (!timeA || !timeB) return 0;
-                        
-                        const dateA = new Date(`${format(selectedDate, 'yyyy-MM-dd')} ${timeA}`);
-                        const dateB = new Date(`${format(selectedDate, 'yyyy-MM-dd')} ${timeB}`);
-                        
-                        return dateA - dateB;
-                      }).length > 0 ? (
-                        team.Members?.flatMap(member => {
-                          const therapistApps = filterAppointments(getTherapistAppointments(member.id));
-                          return therapistApps.map(app => (
+                        return sortedGroups.length > 0 ? (
+                          sortedGroups.map(group => (
                             <div 
-                              key={app.id} 
+                              key={group.id} 
                               className={cn(
                                 "p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer",
-                                searchQuery && 
-                                  (app.patient?.firstName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                                   app.patient?.lastName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                                   member.firstName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                                   member.lastName?.toLowerCase().includes(searchQuery.toLowerCase())) && 
+                                searchQuery && searchQuery.toLowerCase() && 
+                                  (group.patient?.firstName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                                   group.patient?.lastName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                                   group.therapistName?.toLowerCase().includes(searchQuery.toLowerCase())) && 
                                   "bg-yellow-50 dark:bg-yellow-900/20"
                               )}
-                              onClick={() => onAppointmentClick(app)}
+                              onClick={() => onAppointmentClick(group.appointments[0])}
                             >
                               <div className="flex justify-between items-start">
                                 <div>
                                   <div className="font-medium">
                                     <span 
-                                      title={formatFullPatientName(app.patient)}
+                                      title={formatFullPatientName(group.patient)}
                                       className="cursor-help"
                                     >
-                                      {formatPatientName(app.patient)}
+                                      {formatPatientName(group.patient)}
                                     </span>
+                                    {group.appointments.length > 1 && (
+                                      <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">
+                                        {group.appointments.length} sessions
+                                      </span>
+                                    )}
                                   </div>
                                   <div className="text-sm text-gray-500 dark:text-gray-400">
-                                    with {member.firstName} {member.lastName}
+                                    with {group.therapistName}
                                   </div>
                                 </div>
                                 <div className={cn(
                                   "text-xs px-2 py-1 rounded-full",
-                                  SERVICE_TYPE_COLORS[getAppointmentServiceType(app) || 'default']
+                                  SERVICE_TYPE_COLORS[getAppointmentServiceType(group) || 'default']
                                 )}>
-                                  {app.serviceType || getAppointmentServiceType(app) || 'Session'}
+                                  {group.serviceType || getAppointmentServiceType(group) || 'Session'}
                                 </div>
                               </div>
                               
                               <div className="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
                                 <Clock className="h-4 w-4 mr-1" />
-                                <span>{formatTime(app.startTime)} - {formatTime(app.endTime)}</span>
+                                <span>{formatTime(group.startTime)} - {formatTime(group.endTime)}</span>
+                                {group.totalDuration && (
+                                  <span className="ml-2">({group.totalDuration} mins)</span>
+                                )}
                               </div>
                               
-                              {app.location && (
+                              {group.location && (
                                 <div className="mt-1 flex items-center text-sm text-gray-500 dark:text-gray-400">
                                   <MapPin className="h-4 w-4 mr-1" />
-                                  <span>{app.location.name}</span>
+                                  <span>{group.location.name}</span>
                                 </div>
                               )}
                             </div>
-                          ));
-                        }).sort((a, b) => {
-                          // Safely extract the start times
-                          const getTimeText = (component) => {
-                            try {
-                              const timeChildren = component.props.children[2].props.children[1].props.children;
-                              return timeChildren.split(' - ')[0];
-                            } catch (e) {
-                              return '';
-                            }
-                          };
-                          
-                          const timeA = getTimeText(a);
-                          const timeB = getTimeText(b);
-                          
-                          if (!timeA || !timeB) return 0;
-                          
-                          const dateA = new Date(`${format(selectedDate, 'yyyy-MM-dd')} ${timeA}`);
-                          const dateB = new Date(`${format(selectedDate, 'yyyy-MM-dd')} ${timeB}`);
-                          
-                          return dateA - dateB;
-                        })
-                      ) : (
-                        <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                          No appointments scheduled for this team today
-                        </div>
-                      )}
+                          ))
+                        ) : (
+                          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
+                            No appointments scheduled for this team today
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>

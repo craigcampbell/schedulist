@@ -15,6 +15,7 @@ import { Button } from '../../components/ui/button';
 import { getTherapistSchedule, getTeamSchedule } from '../../api/schedule';
 import { calculateAppointmentStyle, formatTime } from '../../utils/date-utils';
 import EnhancedScheduleView from '../../components/schedule/EnhancedScheduleView';
+import { groupConsecutiveAppointments } from '../../utils/appointment-grouping';
 
 export default function TherapistSchedulePage() {
   const { user } = useAuth();
@@ -87,14 +88,22 @@ export default function TherapistSchedulePage() {
     timeSlots.push(new Date(selectedDate).setHours(hour, 0, 0, 0));
   }
   
-  // Filter appointments for daily view
+  // Filter appointments for daily view and group consecutive ones
   const filterDailyAppointments = () => {
     if (!data || !data.appointments) return [];
     
-    return data.appointments.filter(appointment => {
+    const filteredApps = data.appointments.filter(appointment => {
       const appointmentDate = new Date(appointment.startTime);
       return isSameDay(appointmentDate, selectedDate);
     });
+    
+    // Sort by start time
+    const sortedApps = filteredApps.sort((a, b) => 
+      new Date(a.startTime) - new Date(b.startTime)
+    );
+    
+    // Group consecutive appointments
+    return groupConsecutiveAppointments(sortedApps);
   };
   
   // Format patient name for display
@@ -204,30 +213,35 @@ export default function TherapistSchedulePage() {
               ))}
               
               {/* Appointments */}
-              {filterDailyAppointments().map((appointment) => {
-                const style = calculateAppointmentStyle(appointment, 96); // 24px per hour * 4 = 96
+              {filterDailyAppointments().map((group) => {
+                const style = calculateAppointmentStyle(group, 96); // 24px per hour * 4 = 96
                 
                 return (
                   <div
-                    key={appointment.id}
-                    className="appointment cursor-pointer absolute p-2 border-l-4 border-blue-500 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
+                    key={group.id}
+                    className="appointment cursor-pointer absolute p-2 border-l-4 border-blue-500 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors rounded-md"
                     style={{
                       ...style,
                       left: '4px',
                       right: '4px',
                     }}
-                    onClick={() => handleAppointmentClick(appointment)}
+                    onClick={() => handleAppointmentClick(group.appointments[0])}
                   >
                     <div className="text-xs font-medium">
-                      {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
+                      {formatTime(group.startTime)} - {formatTime(group.endTime)}
                     </div>
                     <div className="font-medium truncate">
                       <span 
-                        title={formatFullPatientName(appointment.patient)}
+                        title={formatFullPatientName(group.patient)}
                         className="cursor-help"
                       >
-                        {formatPatientName(appointment.patient)}
+                        {formatPatientName(group.patient)}
                       </span>
+                      {group.appointments.length > 1 && (
+                        <span className="ml-1 text-xs text-gray-600 dark:text-gray-400">
+                          ({group.appointments.length} sessions)
+                        </span>
+                      )}
                     </div>
                   </div>
                 );
@@ -241,40 +255,54 @@ export default function TherapistSchedulePage() {
       {!isLoading && !error && viewType === 'weekly' && (
         <div className="flex-1 overflow-y-auto">
           <div className="space-y-4">
-            {data?.appointments?.map(appointment => (
-              <div
-                key={appointment.id}
-                className="p-4 border rounded-lg bg-white dark:bg-gray-800 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
-                onClick={() => handleAppointmentClick(appointment)}
-              >
-                <div className="flex justify-between items-start">
-                  <div>
-                    <h3 className="font-medium">
-                      <span 
-                        title={formatFullPatientName(appointment.patient)}
-                        className="cursor-help"
-                      >
-                        {formatPatientName(appointment.patient)}
-                      </span>
-                    </h3>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      {format(new Date(appointment.startTime), 'EEEE, MMMM d')}
-                    </p>
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      {formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}
-                    </p>
+            {(() => {
+              // Group all appointments
+              const sortedApps = data?.appointments?.sort((a, b) => 
+                new Date(a.startTime) - new Date(b.startTime)
+              ) || [];
+              const appointmentGroups = groupConsecutiveAppointments(sortedApps);
+              
+              return appointmentGroups.map(group => (
+                <div
+                  key={group.id}
+                  className="p-4 border rounded-lg bg-white dark:bg-gray-800 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+                  onClick={() => handleAppointmentClick(group.appointments[0])}
+                >
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="font-medium">
+                        <span 
+                          title={formatFullPatientName(group.patient)}
+                          className="cursor-help"
+                        >
+                          {formatPatientName(group.patient)}
+                        </span>
+                        {group.appointments.length > 1 && (
+                          <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">
+                            {group.appointments.length} sessions
+                          </span>
+                        )}
+                      </h3>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        {format(new Date(group.startTime), 'EEEE, MMMM d')}
+                      </p>
+                      <p className="text-sm text-gray-600 dark:text-gray-400">
+                        {formatTime(group.startTime)} - {formatTime(group.endTime)}
+                        {group.totalDuration && <span className="ml-2">({group.totalDuration} mins)</span>}
+                      </p>
+                    </div>
+                    <div className="text-sm px-2 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">
+                      {group.appointments[0].status}
+                    </div>
                   </div>
-                  <div className="text-sm px-2 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">
-                    {appointment.status}
+                  
+                  <div className="mt-2 flex items-center text-sm text-gray-600 dark:text-gray-400">
+                    <User className="h-4 w-4 mr-1" />
+                    <span>{group.location?.name || 'No location'}</span>
                   </div>
                 </div>
-                
-                <div className="mt-2 flex items-center text-sm text-gray-600 dark:text-gray-400">
-                  <User className="h-4 w-4 mr-1" />
-                  <span>{appointment.location?.name || 'No location'}</span>
-                </div>
-              </div>
-            ))}
+              ));
+            })()}
             
             {data?.appointments?.length === 0 && (
               <div className="p-8 text-center text-gray-500 dark:text-gray-400">
