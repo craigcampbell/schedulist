@@ -19,6 +19,7 @@ const AdminLocationsPage = () => {
     phone: '',
     workingHoursStart: '08:00',
     workingHoursEnd: '17:00',
+    slotDuration: 30, // 30 or 60 minutes
     active: true
   });
   const [formError, setFormError] = useState(null);
@@ -26,10 +27,14 @@ const AdminLocationsPage = () => {
   const queryClient = useQueryClient();
   
   // Fetch locations
-  const { data: locations, isLoading } = useQuery({
+  const { data: locations, isLoading, error } = useQuery({
     queryKey: ['locations'],
     queryFn: () => getLocations(false) // Get all locations including inactive
   });
+  
+  // Debug logging
+  console.log('Locations query result:', { locations, isLoading, error });
+  console.log('Locations type:', typeof locations, 'Is Array:', Array.isArray(locations));
   
   // Create location mutation
   const createLocationMutation = useMutation({
@@ -61,9 +66,9 @@ const AdminLocationsPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries(['locations']);
     },
-    onError: (error) => {
+    onError: async (error) => {
       console.error('Failed to delete location', error);
-      alert(error.response?.data?.message || 'Failed to delete location');
+      await modal.alert(error.response?.data?.message || 'Failed to delete location', 'Error', 'error');
     }
   });
   
@@ -73,9 +78,9 @@ const AdminLocationsPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries(['locations']);
     },
-    onError: (error) => {
+    onError: async (error) => {
       console.error('Failed to toggle active status', error);
-      alert(error.response?.data?.message || 'Failed to update location status');
+      await modal.alert(error.response?.data?.message || 'Failed to update location status', 'Error', 'error');
     }
   });
   
@@ -139,6 +144,7 @@ const AdminLocationsPage = () => {
       phone: '',
       workingHoursStart: '08:00',
       workingHoursEnd: '17:00',
+      slotDuration: 30,
       active: true
     });
     setFormError(null);
@@ -159,6 +165,7 @@ const AdminLocationsPage = () => {
       phone: location.phone || '',
       workingHoursStart: location.workingHoursStart || '08:00',
       workingHoursEnd: location.workingHoursEnd || '17:00',
+      slotDuration: location.slotDuration || 30,
       active: location.active
     });
     setShowEditForm(true);
@@ -207,13 +214,17 @@ const AdminLocationsPage = () => {
       </div>
       
       {/* Location List */}
-      {isLoading ? (
+      {error ? (
+        <div className="bg-red-50 border border-red-200 p-6 rounded-lg">
+          <p className="text-red-600">Error loading locations: {error.message}</p>
+        </div>
+      ) : isLoading ? (
         <div className="bg-white p-6 rounded-lg shadow">
           <p className="text-gray-500">Loading locations...</p>
         </div>
-      ) : locations?.length > 0 ? (
+      ) : (Array.isArray(locations) ? locations : locations?.data || locations?.locations || [])?.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {locations.map(location => (
+          {(Array.isArray(locations) ? locations : locations?.data || locations?.locations || []).map(location => (
             <div 
               key={location.id} 
               className={`bg-white p-6 rounded-lg shadow ${!location.active ? 'opacity-60' : ''}`}
@@ -254,7 +265,14 @@ const AdminLocationsPage = () => {
                 <div className="flex items-center">
                   <Clock className="h-4 w-4 mr-2 flex-shrink-0" />
                   <span>
-                    Working hours: {location.workingHoursStart || '08:00'} - {location.workingHoursEnd || '17:00'}
+                    Hours: {location.workingHoursStart || '08:00'} - {location.workingHoursEnd || '17:00'}
+                  </span>
+                </div>
+                
+                <div className="flex items-center">
+                  <Clock className="h-4 w-4 mr-2 flex-shrink-0" />
+                  <span>
+                    Slot duration: {location.slotDuration || 30} minutes
                   </span>
                 </div>
               </div>
@@ -388,6 +406,21 @@ const AdminLocationsPage = () => {
                       required
                     />
                   </div>
+                </div>
+                
+                <div className="mt-4">
+                  <label className="block text-sm font-medium mb-1">Appointment Slot Duration</label>
+                  <select
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={formState.slotDuration}
+                    onChange={(e) => setFormState({...formState, slotDuration: parseInt(e.target.value)})}
+                  >
+                    <option value={30}>30 minutes</option>
+                    <option value={60}>1 hour</option>
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    This determines the time slot intervals in the schedule view
+                  </p>
                 </div>
               </div>
               
@@ -526,6 +559,21 @@ const AdminLocationsPage = () => {
                       required
                     />
                   </div>
+                </div>
+                
+                <div className="mt-4">
+                  <label className="block text-sm font-medium mb-1">Appointment Slot Duration</label>
+                  <select
+                    className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                    value={formState.slotDuration}
+                    onChange={(e) => setFormState({...formState, slotDuration: parseInt(e.target.value)})}
+                  >
+                    <option value={30}>30 minutes</option>
+                    <option value={60}>1 hour</option>
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    This determines the time slot intervals in the schedule view
+                  </p>
                 </div>
               </div>
               

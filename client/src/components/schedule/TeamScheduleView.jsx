@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { format, parseISO, isSameDay } from "date-fns";
 import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
 import { cn } from "../../lib/utils";
@@ -9,6 +9,7 @@ import {
   getSpannedTimeSlots,
   getGroupPositionInSlot,
 } from "../../utils/appointment-grouping";
+import { getLocationTimeSlots, getMostCommonLocation } from "../../utils/location-time-slots";
 import ResizableAppointment from "./ResizableAppointment";
 
 const SERVICE_TYPE_COLORS = {
@@ -34,71 +35,6 @@ const SERVICE_TYPE_COLORS = {
   liWu: "bg-pink-200 dark:bg-pink-900/30 text-pink-800 dark:text-pink-200",
 };
 
-const TIME_SLOTS = [
-  "7:30-8:00 AM",
-  "8:00-8:30 AM",
-  "8:30-9:00 AM",
-  "9:00-9:30 AM",
-  "9:30-10:00 AM",
-  "10:00-10:30 AM",
-  "10:30-11:00 AM",
-  "11:00-11:30 AM",
-  "11:30-12:00 PM",
-  "12:00-12:30 PM",
-  "12:30-1:00 PM",
-  "1:00-1:30 PM",
-  "1:30-2:00 PM",
-  "2:00-2:30 PM",
-  "2:30-3:00 PM",
-  "3:00-3:30 PM",
-  "3:30-4:00 PM",
-  "4:00-4:30 PM",
-  "4:30-5:00 PM",
-  "5:00-5:30 PM",
-];
-
-// Calculate how many slots an appointment group spans
-const calculateGroupSpan = (group) => {
-  const start = new Date(group.startTime);
-  const end = new Date(group.endTime);
-  const durationMinutes = (end - start) / (1000 * 60);
-  return Math.ceil(durationMinutes / 30);
-};
-
-// Get the starting slot index for an appointment group
-const getGroupStartSlotIndex = (group) => {
-  const start = new Date(group.startTime);
-  const startHour = start.getHours() + start.getMinutes() / 60;
-
-  return TIME_SLOTS.findIndex((slot) => {
-    const [slotStart] = TIME_SLOT_MAP[slot] || [];
-    return slotStart && startHour >= slotStart && startHour < slotStart + 0.5;
-  });
-};
-
-const TIME_SLOT_MAP = {
-  "7:30-8:00 AM": [7.5, 8.0],
-  "8:00-8:30 AM": [8.0, 8.5],
-  "8:30-9:00 AM": [8.5, 9.0],
-  "9:00-9:30 AM": [9.0, 9.5],
-  "9:30-10:00 AM": [9.5, 10.0],
-  "10:00-10:30 AM": [10.0, 10.5],
-  "10:30-11:00 AM": [10.5, 11.0],
-  "11:00-11:30 AM": [11.0, 11.5],
-  "11:30-12:00 PM": [11.5, 12.0],
-  "12:00-12:30 PM": [12.0, 12.5],
-  "12:30-1:00 PM": [12.5, 13.0],
-  "1:00-1:30 PM": [13.0, 13.5],
-  "1:30-2:00 PM": [13.5, 14.0],
-  "2:00-2:30 PM": [14.0, 14.5],
-  "2:30-3:00 PM": [14.5, 15.0],
-  "3:00-3:30 PM": [15.0, 15.5],
-  "3:30-4:00 PM": [15.5, 16.0],
-  "4:00-4:30 PM": [16.0, 16.5],
-  "4:30-5:00 PM": [16.5, 17.0],
-  "5:00-5:30 PM": [17.0, 17.5],
-};
-
 export default function TeamScheduleView({
   teams,
   appointments = [],
@@ -108,9 +44,43 @@ export default function TeamScheduleView({
   onAppointmentClick = () => {},
   onCellClick = () => {},
   onAppointmentUpdate = () => {},
+  location = null // Add location prop for location-specific time slots
 }) {
   const [expandedTeams, setExpandedTeams] = useState({});
   const [selectedAppointment, setSelectedAppointment] = useState(null);
+
+  // Get appointments for selected date
+  const todaysAppointments = useMemo(() => {
+    return appointments.filter(app => 
+      app && app.startTime && isSameDay(new Date(app.startTime), new Date(selectedDate))
+    );
+  }, [appointments, selectedDate]);
+
+  // Get location-specific time slots
+  const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
+    // Use provided location or find most common location from appointments
+    const targetLocation = location || getMostCommonLocation(todaysAppointments);
+    return getLocationTimeSlots(targetLocation, 'range');
+  }, [location, todaysAppointments]);
+
+  // Calculate how many slots an appointment group spans
+  const calculateGroupSpan = (group) => {
+    const start = new Date(group.startTime);
+    const end = new Date(group.endTime);
+    const durationMinutes = (end - start) / (1000 * 60);
+    return Math.ceil(durationMinutes / 30);
+  };
+
+  // Get the starting slot index for an appointment group
+  const getGroupStartSlotIndex = (group) => {
+    const start = new Date(group.startTime);
+    const startMinutes = start.getHours() * 60 + start.getMinutes();
+
+    return TIME_SLOTS.findIndex((slot) => {
+      const slotRange = TIME_SLOT_RANGES[slot];
+      return slotRange && startMinutes >= slotRange.start && startMinutes < slotRange.end;
+    });
+  };
 
   // Format dates and times
   const formatDayOfWeek = (date) => {

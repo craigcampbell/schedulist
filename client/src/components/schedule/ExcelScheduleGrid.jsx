@@ -19,15 +19,7 @@ import { Button } from '../ui/button';
 import { validateTherapistLunchBreak } from '../../utils/lunch-scheduler';
 import { getAppointmentType, getAppointmentColors, getAppointmentDisplayLabel } from '../../utils/appointmentTypes';
 import { groupConsecutiveAppointments } from '../../utils/appointment-grouping';
-
-// Time slots matching the Excel format (7:30 AM to 5:30 PM)
-const TIME_SLOTS = [
-  "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM", 
-  "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM", "12:00 PM", 
-  "12:30 PM", "1:00 PM", "1:30 PM", "2:00 PM", "2:30 PM", 
-  "3:00 PM", "3:30 PM", "4:00 PM", "4:30 PM", "5:00 PM", 
-  "5:30 PM"
-];
+import { getLocationTimeSlots, getMostCommonLocation } from '../../utils/location-time-slots';
 
 // Service type colors matching therapist workflow
 const SERVICE_COLORS = {
@@ -48,11 +40,26 @@ export default function ExcelScheduleGrid({
   onAppointmentClick = () => {},
   onCellClick = () => {},
   userRole = 'bcba',
-  viewMode = 'team' // 'team', 'therapist', 'patient'
+  viewMode = 'team', // 'team', 'therapist', 'patient'
+  location = null // Add location prop for location-specific time slots
 }) {
   const [expandedTeams, setExpandedTeams] = useState({});
   const [selectedView, setSelectedView] = useState(viewMode);
   const [showValidationWarnings, setShowValidationWarnings] = useState(true);
+
+  // Get appointments for selected date
+  const todaysAppointments = useMemo(() => {
+    return appointments.filter(app => 
+      app && app.startTime && isSameDay(new Date(app.startTime), new Date(selectedDate))
+    );
+  }, [appointments, selectedDate]);
+
+  // Get location-specific time slots
+  const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
+    // Use provided location or find most common location from appointments
+    const targetLocation = location || getMostCommonLocation(todaysAppointments);
+    return getLocationTimeSlots(targetLocation, 'excel');
+  }, [location, todaysAppointments]);
 
   // Format patient name based on user role (matching Excel format)
   const formatPatientName = (patient) => {
@@ -68,38 +75,6 @@ export default function ExcelScheduleGrid({
   const formatFullPatientName = (patient) => {
     if (!patient) return 'Unknown';
     return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
-  };
-
-  // Get appointments for selected date
-  const todaysAppointments = useMemo(() => {
-    return appointments.filter(app => 
-      app && app.startTime && isSameDay(new Date(app.startTime), new Date(selectedDate))
-    );
-  }, [appointments, selectedDate]);
-
-  // Time slot mapping for time calculations
-  const TIME_SLOT_RANGES = {
-    "7:30 AM": { start: 7.5 * 60, end: 8 * 60 },
-    "8:00 AM": { start: 8 * 60, end: 8.5 * 60 },
-    "8:30 AM": { start: 8.5 * 60, end: 9 * 60 },
-    "9:00 AM": { start: 9 * 60, end: 9.5 * 60 },
-    "9:30 AM": { start: 9.5 * 60, end: 10 * 60 },
-    "10:00 AM": { start: 10 * 60, end: 10.5 * 60 },
-    "10:30 AM": { start: 10.5 * 60, end: 11 * 60 },
-    "11:00 AM": { start: 11 * 60, end: 11.5 * 60 },
-    "11:30 AM": { start: 11.5 * 60, end: 12 * 60 },
-    "12:00 PM": { start: 12 * 60, end: 12.5 * 60 },
-    "12:30 PM": { start: 12.5 * 60, end: 13 * 60 },
-    "1:00 PM": { start: 13 * 60, end: 13.5 * 60 },
-    "1:30 PM": { start: 13.5 * 60, end: 14 * 60 },
-    "2:00 PM": { start: 14 * 60, end: 14.5 * 60 },
-    "2:30 PM": { start: 14.5 * 60, end: 15 * 60 },
-    "3:00 PM": { start: 15 * 60, end: 15.5 * 60 },
-    "3:30 PM": { start: 15.5 * 60, end: 16 * 60 },
-    "4:00 PM": { start: 16 * 60, end: 16.5 * 60 },
-    "4:30 PM": { start: 16.5 * 60, end: 17 * 60 },
-    "5:00 PM": { start: 17 * 60, end: 17.5 * 60 },
-    "5:30 PM": { start: 17.5 * 60, end: 18 * 60 }
   };
 
   // Check if appointment overlaps with time slot

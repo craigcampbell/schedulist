@@ -43,6 +43,14 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       defaultValue: '17:00',  // Default 5 PM
     },
+    slotDuration: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 30,  // Default 30-minute slots
+      validate: {
+        isIn: [[30, 60]]  // Only allow 30 or 60 minute slots
+      }
+    },
     organizationId: {
       type: DataTypes.UUID,
       allowNull: true,

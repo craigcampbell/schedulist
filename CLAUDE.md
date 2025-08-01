@@ -2,6 +2,19 @@
 
 This document contains important information about the project structure, conventions, and patterns used in the Schedulist application.
 
+## Project Overview
+
+Schedulist is a comprehensive SaaS platform for managing ABA (Applied Behavior Analysis) therapy services. It provides scheduling, patient management, team coordination, and compliance tracking for behavioral therapy organizations.
+
+### Key Features
+- **Multi-tenant Architecture**: Each organization gets their own subdomain
+- **Role-based Access Control**: Admin, BCBA, and Therapist roles with specific permissions
+- **Encrypted Patient Data**: HIPAA-compliant encryption for sensitive information
+- **Flexible Scheduling**: Location-specific working hours and time slots
+- **Team Management**: BCBAs lead teams of therapists assigned to patients
+- **Appointment Tracking**: Various service types with automatic conflict detection
+- **Audit Trail**: Comprehensive logging for compliance requirements
+
 ## Project Structure
 
 - `/client` - React frontend application
@@ -101,6 +114,34 @@ Key relationships to understand:
 - Therapists are assigned to Patients through BCBAs
 - Teams group Therapists under a lead BCBA
 - Appointments can be direct (with patient) or indirect (without patient)
+
+### Core Database Models
+
+1. **User**: Stores all system users with role assignments
+   - Fields: firstName, lastName, email, password (hashed), roleId, organizationId
+   - Relations: belongsTo Organization, belongsTo Role, hasMany Appointments
+
+2. **Patient**: Encrypted patient records
+   - Encrypted fields: firstName, lastName, dateOfBirth, phone, address, insurance info
+   - Clinical fields: requiredWeeklyHours, approvedHours, approvedHoursStartDate/EndDate
+   - Relations: belongsTo Organization, hasOne primaryBCBA, hasMany Appointments
+
+3. **Team**: Groups therapists under a BCBA lead
+   - Fields: name, leadBcbaId, color
+   - Relations: belongsTo User (as LeadBCBA), hasMany TeamMembers
+
+4. **Appointment**: Scheduling records
+   - Fields: startTime, endTime, status, serviceType, therapistId, bcbaId, patientId, locationId
+   - Service types: direct, indirect, supervision, lunch, circle, cleaning
+   - Relations: belongsTo User (therapist/bcba), belongsTo Patient, belongsTo Location
+
+5. **Location**: Physical therapy locations
+   - Fields: name, address, workingHoursStart, workingHoursEnd, slotDuration
+   - Relations: belongsTo Organization, hasMany Appointments
+
+6. **Organization**: Multi-tenant organizations
+   - Fields: name, slug (for subdomain), subscriptionStatus, trialEndDate
+   - Relations: hasMany Users, hasMany Patients, hasMany Locations
 
 ### Appointment Types
 
@@ -340,6 +381,62 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/schedulist
 3. **Date/Time Handling**: Timezone considerations
    - Always store in UTC, display in user's timezone
 
+## Common API Endpoints
+
+### Authentication
+- `POST /auth/login` - User login
+- `GET /auth/profile` - Get current user profile
+- `POST /auth/logout` - Logout user
+- `POST /auth/forgot-password` - Request password reset
+- `POST /auth/reset-password` - Reset password
+
+### Admin Endpoints
+- `GET /api/admin/users` - List all users
+- `POST /api/admin/users` - Create new user
+- `PUT /api/admin/users/:id` - Update user
+- `DELETE /api/admin/users/:id` - Delete user
+- `GET /api/admin/teams` - List all teams
+- `POST /api/admin/teams` - Create new team
+- `GET /api/admin/locations` - List all locations
+- `POST /api/admin/locations` - Create new location
+
+### BCBA Endpoints
+- `GET /api/bcba/patients` - List BCBA's patients
+- `GET /api/bcba/therapists` - List therapists under BCBA
+- `POST /api/bcba/appointments` - Create appointment
+- `PUT /api/bcba/appointments/:id` - Update appointment
+
+### Schedule Endpoints
+- `GET /api/schedule/appointments` - Get appointments (filtered by date/user)
+- `POST /api/schedule/appointments` - Create appointment
+- `PUT /api/schedule/appointments/:id` - Update appointment
+- `DELETE /api/schedule/appointments/:id` - Delete appointment
+- `GET /api/schedule/conflicts` - Check for scheduling conflicts
+
+## Common Development Workflows
+
+### Adding a New Feature
+1. Check CLAUDE.md for project conventions
+2. Use TodoWrite tool to plan implementation steps
+3. Search codebase for similar patterns using Grep/Glob
+4. Implement feature following existing patterns
+5. Use modal system for user feedback
+6. Run lint and typecheck before committing
+
+### Debugging Tips
+1. Check browser console for API request/response logs
+2. Verify JWT token in localStorage
+3. Check user role permissions for endpoints
+4. Use React Query DevTools to inspect cache
+5. Check server logs for SQL queries and errors
+
+### Working with Schedules
+1. Always consider timezone handling (store UTC, display local)
+2. Use location-specific time slots from utils
+3. Check for appointment conflicts before saving
+4. Handle different service types appropriately
+5. Consider team assignments when scheduling
+
 ## Future Considerations
 
 - The modal system can be extended to support custom input prompts
@@ -348,3 +445,53 @@ DATABASE_URL=postgresql://user:pass@localhost:5432/schedulist
 - Implement WebSocket for real-time schedule updates
 - Add audit logging for compliance
 - Consider implementing soft deletes for data retention
+- Add bulk scheduling operations
+- Implement recurring appointment templates
+- Add patient progress tracking
+- Consider integration with insurance billing systems
+
+## Quick Reference
+
+### Common Commands
+```bash
+# Start development servers
+npm run dev:full           # Starts both frontend and backend
+
+# Database operations
+npm run db:seed           # Seed database with test data
+npm run db:seed:mjs       # Alternative seed script
+
+# Code quality
+npm run lint              # Run linter
+npm run typecheck         # Run type checking
+
+# Individual servers
+npm run client            # Start frontend only
+npm run server            # Start backend only
+```
+
+### Default Ports
+- Frontend: http://localhost:5173
+- Backend: http://localhost:5050
+
+### Test Credentials (Development Only)
+After running seed script, you can login with:
+- Admin: Check seed output for generated emails
+- Password: Usually 'password123' for seeded users
+
+### Environment Variables
+Required in `.env`:
+```
+NODE_ENV=development
+PORT=5050
+JWT_SECRET=your-secret-key
+DATABASE_URL=postgresql://user:pass@localhost:5432/schedulist
+```
+
+## Recent Fixes
+
+### PatientScheduleGrid - todaysAppointments undefined
+- **Issue**: Component was referencing `todaysAppointments` without defining it
+- **Fix**: Added `useMemo` to filter appointments for selected date
+- **Date**: 2025-08-01
+- **Files**: `/client/src/components/schedule/PatientScheduleGrid.jsx`

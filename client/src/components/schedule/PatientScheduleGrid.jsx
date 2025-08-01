@@ -24,14 +24,7 @@ import { Button } from '../ui/button';
 import { analyzeTherapistContinuity, calculateContinuityScore } from '../../utils/continuity-tracker';
 import { getAppointmentType, getAppointmentColors } from '../../utils/appointmentTypes';
 import { groupConsecutiveAppointments } from '../../utils/appointment-grouping';
-
-// Time slots matching the Excel format
-const TIME_SLOTS = [
-  "7:30-8:00", "8:00-8:30", "8:30-9:00", "9:00-9:30", "9:30-10:00", 
-  "10:00-10:30", "10:30-11:00", "11:00-11:30", "11:30-12:00", "12:00-12:30", 
-  "12:30-1:00", "1:00-1:30", "1:30-2:00", "2:00-2:30", "2:30-3:00", 
-  "3:00-3:30", "3:30-4:00", "4:00-4:30", "4:30-5:00", "5:00-5:30"
-];
+import { getLocationTimeSlots, getMostCommonLocation } from '../../utils/location-time-slots';
 
 // Coverage status colors
 const COVERAGE_COLORS = {
@@ -53,7 +46,8 @@ export default function PatientScheduleGrid({
   onCellClick = () => {},
   userRole = 'bcba',
   showOnlyUncovered = false,
-  viewMode = 'grid' // 'grid' or 'columns'
+  viewMode = 'grid', // 'grid' or 'columns'
+  location = null // Add location prop for location-specific time slots
 }) {
   // Debug data received by component - ALWAYS LOG THIS
   console.log('========================');
@@ -77,6 +71,7 @@ export default function PatientScheduleGrid({
     console.log(`${index + 1}. ID: ${patient.id} - Name: ${patient.firstName} ${patient.lastName}`);
   });
   console.log('========================');
+  
   const [expandedPatients, setExpandedPatients] = useState({});
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [draggedTherapist, setDraggedTherapist] = useState(null);
@@ -89,6 +84,20 @@ export default function PatientScheduleGrid({
   const [reorderAnimation, setReorderAnimation] = useState(null);
   const [layoutDensity, setLayoutDensity] = useState('normal'); // 'compact', 'normal', 'spacious'
   const dragRef = useRef(null);
+
+  // Filter appointments for today
+  const todaysAppointments = useMemo(() => {
+    return appointments.filter(appointment => 
+      isSameDay(parseISO(appointment.startTime), selectedDate)
+    );
+  }, [appointments, selectedDate]);
+
+  // Get location-specific time slots
+  const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
+    // Use provided location or find most common location from appointments
+    const targetLocation = location || getMostCommonLocation(todaysAppointments);
+    return getLocationTimeSlots(targetLocation, 'simple');
+  }, [location, todaysAppointments]);
 
   // Format names based on user role
   const formatPatientName = (patient) => {
@@ -136,28 +145,6 @@ export default function PatientScheduleGrid({
     
     return gaps;
   };
-
-  // Get appointments for selected date
-  const todaysAppointments = useMemo(() => {
-    const filtered = appointments.filter(app => 
-      app && app.startTime && isSameDay(new Date(app.startTime), new Date(selectedDate))
-    );
-    console.log('🗓️ PatientScheduleGrid appointments filtered:', {
-      totalAppointments: appointments.length,
-      todaysAppointments: filtered.length,
-      selectedDate: selectedDate.toISOString().split('T')[0],
-      appointments: filtered.map(app => ({
-        id: app.id,
-        startTime: app.startTime,
-        patientId: app.patientId,
-        patient: app.patient?.firstName + ' ' + app.patient?.lastName,
-        therapist: app.therapist?.firstName + ' ' + app.therapist?.lastName,
-        serviceType: app.serviceType,
-        status: app.status
-      }))
-    });
-    return filtered;
-  }, [appointments, selectedDate]);
 
   // Group appointments by patient and analyze coverage
   const patientScheduleData = useMemo(() => {
@@ -257,7 +244,7 @@ export default function PatientScheduleGrid({
       // Analyze continuity
       if (data.appointments.length > 0) {
         try {
-          const continuityAnalysis = analyzeTherapistContinuity(patient.id, appointments, selectedDate, 'weekly');
+          const continuityAnalysis = analyzeTherapistContinuity(data.patient.id, appointments, selectedDate, 'weekly');
           data.continuityScore = calculateContinuityScore(continuityAnalysis);
           data.continuityWarnings = continuityAnalysis.warnings;
           data.therapistRotation = continuityAnalysis.uniqueTherapists.size;
@@ -362,10 +349,22 @@ export default function PatientScheduleGrid({
   }, [layoutDensity]);
 
   // Initialize patient order when filtered patients change
-  const orderedPatients = useMemo(() => {
-    if (patientOrder.length === 0) {
+  useEffect(() => {
+    if (patientOrder.length === 0 && filteredPatients.length > 0) {
       const initialOrder = filteredPatients.map(p => p.id);
       setPatientOrder(initialOrder);
+    } else if (patientOrder.length > 0 && filteredPatients.length > 0) {
+      // Check for new patients not in the order
+      const newPatients = filteredPatients.filter(p => !patientOrder.includes(p.id));
+      if (newPatients.length > 0) {
+        setPatientOrder(prev => [...prev, ...newPatients.map(p => p.id)]);
+      }
+    }
+  }, [filteredPatients]);
+
+  // Order patients based on saved order
+  const orderedPatients = useMemo(() => {
+    if (patientOrder.length === 0) {
       return filteredPatients;
     }
     
@@ -376,14 +375,8 @@ export default function PatientScheduleGrid({
     
     // Add any new patients not in the order
     const newPatients = filteredPatients.filter(p => !patientOrder.includes(p.id));
-    const finalOrder = [...ordered, ...newPatients];
     
-    // Update order if there are new patients
-    if (newPatients.length > 0) {
-      setPatientOrder([...patientOrder, ...newPatients.map(p => p.id)]);
-    }
-    
-    return finalOrder;
+    return [...ordered, ...newPatients];
   }, [filteredPatients, patientOrder]);
 
   const togglePatient = (patientId) => {

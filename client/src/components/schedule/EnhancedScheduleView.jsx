@@ -16,6 +16,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../../components/ui/input';
 import { groupConsecutiveAppointments, getSpannedTimeSlots, getGroupPositionInSlot } from '../../utils/appointment-grouping';
+import { getLocationTimeSlots, getMostCommonLocation } from '../../utils/location-time-slots';
 
 // Colors for different service types
 const SERVICE_TYPE_COLORS = {
@@ -30,7 +31,7 @@ const SERVICE_TYPE_COLORS = {
   uncovered: 'bg-red-500 dark:bg-red-600 text-white animate-pulse',
 };
 
-// Get dynamic time slots based on appointments
+// Get dynamic time slots based on appointments (fallback function)
 const getTimeSlots = (appointments, defaultStartHour = 7, defaultEndHour = 18) => {
   if (!appointments || appointments.length === 0) {
     // Default time slots if no appointments
@@ -130,7 +131,8 @@ export default function EnhancedScheduleView(props) {
     onAppointmentUpdate = () => {},
     onAppointmentClick = () => {},
     showLocationView = false,
-    userRole = null // Add userRole prop to determine name display format
+    userRole = null, // Add userRole prop to determine name display format
+    location = null // Add location prop for location-specific time slots
   } = props;
   const [expandedTeams, setExpandedTeams] = useState({});
   const [searchQuery, setSearchQuery] = useState('');
@@ -143,6 +145,20 @@ export default function EnhancedScheduleView(props) {
   // Therapists see abbreviated names, BCBA/Admin see full names
   const useHipaaNames = userRole === 'therapist';
   const [showNameToggle, setShowNameToggle] = useState(false); // Allow manual toggle for BCBA/Admin only
+
+  // Get appointments for selected date
+  const todaysAppointments = useMemo(() => {
+    return appointments.filter(app => 
+      app && app.startTime && isSameDay(new Date(app.startTime), new Date(selectedDate))
+    );
+  }, [appointments, selectedDate]);
+
+  // Get location-specific time slots
+  const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
+    // Use provided location or find most common location from appointments
+    const targetLocation = location || getMostCommonLocation(todaysAppointments);
+    return getLocationTimeSlots(targetLocation, 'range');
+  }, [location, todaysAppointments]);
   
   // Get service code for display
   const getAppointmentServiceType = (appointment) => {
@@ -266,20 +282,20 @@ export default function EnhancedScheduleView(props) {
 
   // Check if an appointment is in a time slot
   const isAppointmentInTimeSlot = (appointment, timeSlot) => {
-    const [slotStart, slotEnd] = timeSlotMap[timeSlot] || [];
-    if (!slotStart || !slotEnd) return false;
+    const slotRange = TIME_SLOT_RANGES[timeSlot];
+    if (!slotRange) return false;
 
     const appStart = new Date(appointment.startTime);
     const appEnd = new Date(appointment.endTime);
     
-    const appStartHour = appStart.getHours() + (appStart.getMinutes() / 60);
-    const appEndHour = appEnd.getHours() + (appEnd.getMinutes() / 60);
+    const appStartMinutes = appStart.getHours() * 60 + appStart.getMinutes();
+    const appEndMinutes = appEnd.getHours() * 60 + appEnd.getMinutes();
 
     // Check if appointment overlaps with this time slot
     return (
-      (appStartHour >= slotStart && appStartHour < slotEnd) || // Starts in this slot
-      (appEndHour > slotStart && appEndHour <= slotEnd) || // Ends in this slot
-      (appStartHour <= slotStart && appEndHour >= slotEnd) // Spans across this slot
+      (appStartMinutes >= slotRange.start && appStartMinutes < slotRange.end) || // Starts in this slot
+      (appEndMinutes > slotRange.start && appEndMinutes <= slotRange.end) || // Ends in this slot
+      (appStartMinutes <= slotRange.start && appEndMinutes >= slotRange.end) // Spans across this slot
     );
   };
 
@@ -348,7 +364,7 @@ export default function EnhancedScheduleView(props) {
     if (!appointment) return;
     
     // Get the time slot that the appointment was dragged to
-    const targetTimeSlot = timeSlots[destination.index];
+    const targetTimeSlot = TIME_SLOTS[destination.index];
     const [targetStartHour, targetStartMinute] = targetTimeSlot.split('-')[0].split(':').map(Number);
     
     // Calculate the time difference between the appointment's original start time and end time

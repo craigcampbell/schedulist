@@ -428,7 +428,9 @@ const getAllLocations = async (req, res) => {
   try {
     const { active } = req.query;
     
-    const where = {};
+    const where = {
+      organizationId: req.user.organizationId
+    };
     
     // Only filter by active status if explicitly provided
     if (active !== undefined) {
@@ -443,6 +445,7 @@ const getAllLocations = async (req, res) => {
     return res.status(200).json(locations);
     
   } catch (error) {
+    console.error('Error fetching locations:', error);
     return res.status(500).json({ message: 'Error fetching locations', error: error.message });
   }
 };
@@ -452,7 +455,7 @@ const getAllLocations = async (req, res) => {
  */
 const createLocation = async (req, res) => {
   try {
-    const { name, address, city, state, zipCode, phone } = req.body;
+    const { name, address, city, state, zipCode, phone, workingHoursStart, workingHoursEnd, slotDuration } = req.body;
     
     const location = await Location.create({
       name,
@@ -461,15 +464,16 @@ const createLocation = async (req, res) => {
       state,
       zipCode,
       phone,
-      active: true
+      workingHoursStart: workingHoursStart || '08:00',
+      workingHoursEnd: workingHoursEnd || '17:00',
+      slotDuration: slotDuration || 30,
+      active: true,
+      organizationId: req.user.organizationId
     });
     
     return res.status(201).json({
       message: 'Location created successfully',
-      location: {
-        id: location.id,
-        name: location.name
-      }
+      location
     });
     
   } catch (error) {
@@ -483,31 +487,35 @@ const createLocation = async (req, res) => {
 const updateLocation = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, address, city, state, zipCode, phone, active } = req.body;
+    const { name, address, city, state, zipCode, phone, active, workingHoursStart, workingHoursEnd, slotDuration } = req.body;
     
-    const location = await Location.findByPk(id);
+    const location = await Location.findOne({
+      where: { 
+        id,
+        organizationId: req.user.organizationId
+      }
+    });
     
     if (!location) {
       return res.status(404).json({ message: 'Location not found' });
     }
 
-    if (name) location.name = name;
-    if (address) location.address = address;
-    if (city) location.city = city;
-    if (state) location.state = state;
-    if (zipCode) location.zipCode = zipCode;
-    if (phone) location.phone = phone;
+    if (name !== undefined) location.name = name;
+    if (address !== undefined) location.address = address;
+    if (city !== undefined) location.city = city;
+    if (state !== undefined) location.state = state;
+    if (zipCode !== undefined) location.zipCode = zipCode;
+    if (phone !== undefined) location.phone = phone;
     if (active !== undefined) location.active = active;
+    if (workingHoursStart !== undefined) location.workingHoursStart = workingHoursStart;
+    if (workingHoursEnd !== undefined) location.workingHoursEnd = workingHoursEnd;
+    if (slotDuration !== undefined) location.slotDuration = slotDuration;
     
     await location.save();
     
     return res.status(200).json({
       message: 'Location updated successfully',
-      location: {
-        id: location.id,
-        name: location.name,
-        active: location.active
-      }
+      location
     });
     
   } catch (error) {
