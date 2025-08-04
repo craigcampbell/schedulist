@@ -11,6 +11,7 @@ import {
 } from "../../utils/appointment-grouping";
 import { getLocationTimeSlots, getMostCommonLocation } from "../../utils/location-time-slots";
 import ResizableAppointment from "./ResizableAppointment";
+import { getAppointmentType } from "../../utils/appointmentTypes";
 
 const SERVICE_TYPE_COLORS = {
   direct: "bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200",
@@ -60,7 +61,7 @@ export default function TeamScheduleView({
   const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
     // Use provided location or find most common location from appointments
     const targetLocation = location || getMostCommonLocation(todaysAppointments);
-    return getLocationTimeSlots(targetLocation, 'range');
+    return getLocationTimeSlots(targetLocation, 'excel');
   }, [location, todaysAppointments]);
 
   // Calculate how many slots an appointment group spans
@@ -100,7 +101,13 @@ export default function TeamScheduleView({
   };
 
   // Format patient name based on user role
-  const formatPatientName = (patient) => {
+  const formatPatientName = (patient, appointment) => {
+    // If no patient and appointment has a service type, show the service type
+    if (!patient && appointment) {
+      const appointmentType = getAppointmentType(appointment.serviceType || 'direct');
+      return appointment.title || appointmentType.label;
+    }
+    
     if (!patient) return "Unknown";
 
     // For all roles in schedule view, show abbreviated names (first 2 + last 2 chars)
@@ -110,7 +117,13 @@ export default function TeamScheduleView({
   };
 
   // Format full patient name for hover/tooltip
-  const formatFullPatientName = (patient) => {
+  const formatFullPatientName = (patient, appointment) => {
+    // If no patient and appointment has a service type, show the service type
+    if (!patient && appointment) {
+      const appointmentType = getAppointmentType(appointment.serviceType || 'direct');
+      return appointment.title || appointmentType.label;
+    }
+    
     if (!patient) return "Unknown";
     return `${patient.firstName || "Unknown"} ${patient.lastName || ""}`;
   };
@@ -453,10 +466,10 @@ export default function TeamScheduleView({
                           <div>
                             <div className="font-medium">
                               <span
-                                title={formatFullPatientName(group.patient)}
+                                title={formatFullPatientName(group.patient, group.appointments[0])}
                                 className="cursor-help"
                               >
-                                {formatPatientName(group.patient)}
+                                {formatPatientName(group.patient, group.appointments[0])}
                               </span>
                               {group.appointments.length > 1 && (
                                 <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">
@@ -611,7 +624,7 @@ export default function TeamScheduleView({
                                   ref={provided.innerRef}
                                   {...provided.droppableProps}
                                   className={cn(
-                                    "border-r dark:border-gray-700 h-[40px] relative",
+                                    "border-r dark:border-gray-700 h-[40px] relative overflow-visible",
                                     snapshot.isDraggingOver &&
                                       "bg-blue-50 dark:bg-blue-900/20",
                                   )}
@@ -642,19 +655,39 @@ export default function TeamScheduleView({
                                       draggableId={groupInfo.group.id}
                                       index={i}
                                     >
-                                      {(provided, snapshot) => (
-                                        <div
-                                          ref={provided.innerRef}
-                                          {...provided.draggableProps}
-                                          {...provided.dragHandleProps}
-                                          style={{
-                                            ...provided.draggableProps.style,
-                                            position: "relative",
-                                            zIndex: snapshot.isDragging
-                                              ? 999
-                                              : 1,
-                                          }}
-                                        >
+                                      {(provided, snapshot) => {
+                                        // Calculate offset for appointments that don't start on slot boundaries
+                                        const appointmentStart = new Date(groupInfo.group.startTime);
+                                        const startMinutes = appointmentStart.getMinutes();
+                                        const slotRange = TIME_SLOT_RANGES[TIME_SLOTS[i]];
+                                        let topOffset = 0;
+                                        
+                                        if (slotRange) {
+                                          // Calculate how many minutes into the slot this appointment starts
+                                          const slotStartMinutes = slotRange.start % 60;
+                                          const minutesIntoSlot = startMinutes - slotStartMinutes;
+                                          
+                                          // Convert to pixels (40px per 30 minutes)
+                                          if (minutesIntoSlot > 0) {
+                                            topOffset = (minutesIntoSlot / 30) * 40;
+                                          }
+                                        }
+                                        
+                                        return (
+                                          <div
+                                            ref={provided.innerRef}
+                                            {...provided.draggableProps}
+                                            {...provided.dragHandleProps}
+                                            style={{
+                                              ...provided.draggableProps.style,
+                                              position: "absolute",
+                                              top: topOffset,
+                                              width: "100%",
+                                              zIndex: snapshot.isDragging
+                                                ? 999
+                                                : 1,
+                                            }}
+                                          >
                                           <ResizableAppointment
                                             group={groupInfo.group}
                                             serviceType={getAppointmentServiceType(
@@ -683,6 +716,7 @@ export default function TeamScheduleView({
                                               <span>
                                                 {formatPatientName(
                                                   groupInfo.group.patient,
+                                                  groupInfo.group.appointments[0]
                                                 )}
                                               </span>
                                             </div>
@@ -709,7 +743,8 @@ export default function TeamScheduleView({
                                             )}
                                           </ResizableAppointment>
                                         </div>
-                                      )}
+                                        );
+                                      }}
                                     </Draggable>
                                   )}
 
@@ -770,10 +805,11 @@ export default function TeamScheduleView({
                                     <span
                                       title={formatFullPatientName(
                                         group.patient,
+                                        group.appointments[0]
                                       )}
                                       className="cursor-help"
                                     >
-                                      {formatPatientName(group.patient)}
+                                      {formatPatientName(group.patient, group.appointments[0])}
                                     </span>
                                     {group.appointments.length > 1 && (
                                       <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">

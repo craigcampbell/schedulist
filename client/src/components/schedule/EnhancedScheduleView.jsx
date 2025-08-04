@@ -17,6 +17,7 @@ import { Button } from '../ui/button';
 import { Input } from '../../components/ui/input';
 import { groupConsecutiveAppointments, getSpannedTimeSlots, getGroupPositionInSlot } from '../../utils/appointment-grouping';
 import { getLocationTimeSlots, getMostCommonLocation } from '../../utils/location-time-slots';
+import { getAppointmentType, requiresPatient } from '../../utils/appointmentTypes';
 
 // Colors for different service types
 const SERVICE_TYPE_COLORS = {
@@ -157,7 +158,7 @@ export default function EnhancedScheduleView(props) {
   const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
     // Use provided location or find most common location from appointments
     const targetLocation = location || getMostCommonLocation(todaysAppointments);
-    return getLocationTimeSlots(targetLocation, 'range');
+    return getLocationTimeSlots(targetLocation, 'excel');
   }, [location, todaysAppointments]);
   
   // Get service code for display
@@ -216,15 +217,20 @@ export default function EnhancedScheduleView(props) {
     return Array.from(types);
   }, [appointments]);
   
-  // Dynamic time slots based on appointments
-  const timeSlots = useMemo(() => 
-    getTimeSlots(Array.isArray(appointments) ? appointments : []), 
-    [appointments]
-  );
-  const timeSlotMap = useMemo(() => 
-    createTimeSlotMap(Array.isArray(timeSlots) ? timeSlots : []), 
-    [timeSlots]
-  );
+  // Note: We now get TIME_SLOTS and TIME_SLOT_RANGES from location-specific time slots above
+  // No need for dynamic time slot calculation since it's handled by getLocationTimeSlots
+  
+  // Convert TIME_SLOT_RANGES to the format expected by appointment-grouping functions
+  const timeSlotMap = useMemo(() => {
+    const map = {};
+    TIME_SLOTS.forEach((slot, index) => {
+      const range = TIME_SLOT_RANGES[slot];
+      if (range) {
+        map[slot] = [range.start / 60, range.end / 60]; // Convert minutes to hours
+      }
+    });
+    return map;
+  }, [TIME_SLOTS, TIME_SLOT_RANGES]);
   
   // Format dates and times
   const formatDayOfWeek = (date) => {
@@ -244,7 +250,13 @@ export default function EnhancedScheduleView(props) {
   };
   
   // Format patient name based on user role and HIPAA settings
-  const formatPatientName = (patient) => {
+  const formatPatientName = (patient, appointment) => {
+    // If no patient but we have an appointment, show the service type
+    if (!patient && appointment) {
+      const appointmentType = getAppointmentType(appointment.serviceType || 'direct');
+      return appointment.title || appointmentType.label;
+    }
+    
     if (!patient) return 'Unknown';
     
     // For all roles in enhanced schedule view, show abbreviated names (first 2 + last 2 chars)
@@ -254,7 +266,13 @@ export default function EnhancedScheduleView(props) {
   };
 
   // Format full patient name for hover/tooltip
-  const formatFullPatientName = (patient) => {
+  const formatFullPatientName = (patient, appointment) => {
+    // If no patient but we have an appointment, show the service type
+    if (!patient && appointment) {
+      const appointmentType = getAppointmentType(appointment.serviceType || 'direct');
+      return appointment.title || appointmentType.label;
+    }
+    
     if (!patient) return 'Unknown';
     return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
   };
@@ -607,8 +625,7 @@ export default function EnhancedScheduleView(props) {
                         </div>
 
                         {/* Time slots */}
-                        {timeSlots.map((timeSlot, index) => {
-                          const [startTime, endTime] = timeSlot.split('-');
+                        {TIME_SLOTS.map((timeSlot, index) => {
                           return (
                             <div 
                               key={index}
@@ -616,7 +633,7 @@ export default function EnhancedScheduleView(props) {
                             >
                               {/* Time column */}
                               <div className="p-2 text-sm border-r dark:border-gray-700 font-medium text-center">
-                                {formatDisplayTime(startTime)} - {formatDisplayTime(endTime)}
+                                {timeSlot}
                               </div>
 
                               {/* Therapist columns */}
@@ -683,9 +700,9 @@ export default function EnhancedScheduleView(props) {
                                         onClick={groupInSlot ? () => onAppointmentClick(groupInSlot.appointments[0]) : undefined}
                                         title={
                                           hasUncovered 
-                                            ? `⚠️ UNCOVERED: ${formatFullPatientName(uncoveredInSlot[0].patient)} - ${uncoveredInSlot[0].reason}`
+                                            ? `⚠️ UNCOVERED: ${formatFullPatientName(uncoveredInSlot[0].patient, uncoveredInSlot[0])} - ${uncoveredInSlot[0].reason}`
                                             : groupInSlot 
-                                              ? `${formatFullPatientName(groupInSlot.patient)} - ${formatTime(groupInSlot.startTime)} to ${formatTime(groupInSlot.endTime)}`
+                                              ? `${formatFullPatientName(groupInSlot.patient, groupInSlot.appointments[0])} - ${formatTime(groupInSlot.startTime)} to ${formatTime(groupInSlot.endTime)}`
                                               : ''
                                         }
                                         ref={provided.innerRef}
@@ -695,15 +712,25 @@ export default function EnhancedScheduleView(props) {
                                         {groupInSlot ? (
                                           <div className="font-medium">
                                             {hasUncovered && <span className="text-xs">⚠️ </span>}
-                                            {/* Only show patient name in the first slot of the group */}
-                                            {position?.isFirstSlot || position?.isOnlySlot ? (
+                                            {/* For non-patient appointments, always show the service type */}
+                                            {(!requiresPatient(groupInSlot.serviceType) || !groupInSlot.patient) ? (
                                               <span 
-                                                title={formatFullPatientName(groupInSlot.patient)}
+                                                title={formatFullPatientName(groupInSlot.patient, groupInSlot.appointments[0])}
                                                 className="cursor-help"
                                               >
-                                                {formatPatientName(groupInSlot.patient)}
+                                                {formatPatientName(groupInSlot.patient, groupInSlot.appointments[0])}
                                               </span>
-                                            ) : null}
+                                            ) : (
+                                              /* For patient appointments, only show in the first slot */
+                                              (position?.isFirstSlot || position?.isOnlySlot) ? (
+                                                <span 
+                                                  title={formatFullPatientName(groupInSlot.patient, groupInSlot.appointments[0])}
+                                                  className="cursor-help"
+                                                >
+                                                  {formatPatientName(groupInSlot.patient, groupInSlot.appointments[0])}
+                                                </span>
+                                              ) : null
+                                            )}
                                           </div>
                                         ) : null}
                                         {hasUncovered && (
@@ -767,10 +794,10 @@ export default function EnhancedScheduleView(props) {
                                 <div>
                                   <div className="font-medium">
                                     <span 
-                                      title={formatFullPatientName(group.patient)}
+                                      title={formatFullPatientName(group.patient, group.appointments[0])}
                                       className="cursor-help"
                                     >
-                                      {formatPatientName(group.patient)}
+                                      {formatPatientName(group.patient, group.appointments[0])}
                                     </span>
                                     {group.appointments.length > 1 && (
                                       <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">

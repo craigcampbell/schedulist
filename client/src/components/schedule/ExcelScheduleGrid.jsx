@@ -58,7 +58,31 @@ export default function ExcelScheduleGrid({
   const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
     // Use provided location or find most common location from appointments
     const targetLocation = location || getMostCommonLocation(todaysAppointments);
-    return getLocationTimeSlots(targetLocation, 'excel');
+    
+    // Find the latest appointment end time to extend schedule if needed
+    let extendedLocation = targetLocation;
+    if (todaysAppointments.length > 0) {
+      const latestEnd = todaysAppointments.reduce((latest, app) => {
+        const endTime = new Date(app.endTime);
+        return endTime > latest ? endTime : latest;
+      }, new Date(0));
+      
+      const latestEndHour = latestEnd.getHours();
+      const latestEndMinutes = latestEnd.getMinutes();
+      
+      // If appointments go past the location's working hours, extend them
+      if (targetLocation && targetLocation.workingHoursEnd) {
+        const [workEndHour, workEndMinute] = targetLocation.workingHoursEnd.split(':').map(Number);
+        if (latestEndHour > workEndHour || (latestEndHour === workEndHour && latestEndMinutes > workEndMinute)) {
+          extendedLocation = {
+            ...targetLocation,
+            workingHoursEnd: `${latestEndHour}:${latestEndMinutes > 30 ? '59' : latestEndMinutes === 0 ? '30' : '59'}`
+          };
+        }
+      }
+    }
+    
+    return getLocationTimeSlots(extendedLocation, 'excel');
   }, [location, todaysAppointments]);
 
   // Format patient name based on user role (matching Excel format)
@@ -126,6 +150,18 @@ export default function ExcelScheduleGrid({
       const slotRange = TIME_SLOT_RANGES[slot];
       return slotRange && startMinutes >= slotRange.start && startMinutes < slotRange.end;
     });
+    
+    // If no exact match, find the closest slot
+    if (index === -1) {
+      // Find the slot that this appointment should start in
+      for (let i = 0; i < TIME_SLOTS.length; i++) {
+        const slotRange = TIME_SLOT_RANGES[TIME_SLOTS[i]];
+        if (slotRange && startMinutes < slotRange.end) {
+          return i;
+        }
+      }
+    }
+    
     return index;
   };
 
@@ -167,7 +203,15 @@ export default function ExcelScheduleGrid({
             // Convert time slot to expected format "7:30-8:00 AM"
             const currentSlot = TIME_SLOTS[slotIndex];
             const nextSlot = TIME_SLOTS[slotIndex + 1] || "6:00 PM";
-            const timeSlotFormatted = `${currentSlot.replace(' AM', '').replace(' PM', '')}-${nextSlot}`;
+            
+            // Extract time without AM/PM for current slot
+            const currentTime = currentSlot.replace(' AM', '').replace(' PM', '');
+            const nextTime = nextSlot.replace(' AM', '').replace(' PM', '');
+            
+            // Determine if it's AM or PM based on the slots
+            const period = currentSlot.includes('PM') || (currentSlot.includes('12:') && !currentSlot.includes('AM')) ? 'PM' : 'AM';
+            
+            const timeSlotFormatted = `${currentTime}-${nextTime} ${period}`;
             
             onCellClick({ 
               therapistId, 
@@ -192,23 +236,45 @@ export default function ExcelScheduleGrid({
     const serviceType = group.serviceType || 'direct';
     const appointmentType = getAppointmentType(serviceType);
     const colors = getAppointmentColors(serviceType);
-    const isPatientSession = group.patientId && serviceType === 'direct';
+    
+    // Check if this is a direct service appointment (with or without explicit patient)
+    const isDirectService = serviceType === 'direct';
+    const hasPatient = group.patientId || group.patient;
+    
+    // Calculate offset for appointments that don't start on slot boundaries
+    const appointmentStart = new Date(group.startTime);
+    const appointmentStartMinutes = appointmentStart.getHours() * 60 + appointmentStart.getMinutes();
+    const slotRange = TIME_SLOT_RANGES[TIME_SLOTS[slotIndex]];
+    let topOffset = 2; // Default 2px padding
+    
+    if (slotRange) {
+      // Calculate how many minutes into the slot this appointment starts
+      const minutesIntoSlot = appointmentStartMinutes - slotRange.start;
+      
+      // Convert to pixels (40px per 30 minutes)
+      if (minutesIntoSlot > 0 && minutesIntoSlot < 30) {
+        topOffset = 2 + (minutesIntoSlot / 30) * 40;
+      }
+    }
     
     // Calculate the height based on how many slots it spans
+    const appointmentHeight = totalSpan * 40 - 4; // 40px per slot minus padding
+    
     const heightStyle = {
-      height: `${totalSpan * 40 - 4}px`, // 40px per slot minus padding
+      height: `${appointmentHeight}px`,
       position: 'absolute',
-      top: '2px',
+      top: `${topOffset}px`,
       left: '2px',
       right: '2px',
-      zIndex: 10
+      zIndex: 20,
+      width: 'calc(100% - 4px)'
     };
     
-    if (isPatientSession) {
+    if (isDirectService) {
       // Look up patient data if not included in appointment
       const patient = group.patient || patients.find(p => p.id === group.patientId);
-      const patientName = formatPatientName(patient);
-      const patientColor = patient?.color || '#6B7280';
+      const patientName = patient ? formatPatientName(patient) : 'Unknown';
+      const patientColor = patient?.color || '#3B82F6'; // Default to blue if no patient color
       
       return (
         <div 
@@ -219,17 +285,19 @@ export default function ExcelScheduleGrid({
             backgroundColor: `${patientColor}15` // 15 is hex for ~9% opacity
           }}
           onClick={() => onAppointmentClick(group.appointments[0])}
-          title={`${formatFullPatientName(patient)} - ${format(new Date(group.startTime), 'h:mm a')} to ${format(new Date(group.endTime), 'h:mm a')}`}
+          title={`${patient ? formatFullPatientName(patient) : 'Direct Service'} - ${format(new Date(group.startTime), 'h:mm a')} to ${format(new Date(group.endTime), 'h:mm a')}`}
         >
-          <div className="flex flex-col h-full">
+          <div className="flex flex-col h-full justify-center items-center text-center">
             <div className="text-xs font-semibold" style={{ color: patientColor }}>
-              {patientName}
+              {patient ? patientName : '👤 Direct'}
             </div>
-            <div className="text-xs opacity-75 mt-1" style={{ color: patientColor }}>
-              {format(new Date(group.startTime), 'h:mm')} - {format(new Date(group.endTime), 'h:mm a')}
-            </div>
+            {totalSpan > 1 && (
+              <div className="text-xs opacity-75 mt-1" style={{ color: patientColor }}>
+                {format(new Date(group.startTime), 'h:mm')} - {format(new Date(group.endTime), 'h:mm a')}
+              </div>
+            )}
             {group.appointments.length > 1 && (
-              <div className="text-xs opacity-60 mt-auto" style={{ color: patientColor }}>
+              <div className="text-xs opacity-60" style={{ color: patientColor }}>
                 {group.appointments.length} sessions
               </div>
             )}
@@ -237,6 +305,7 @@ export default function ExcelScheduleGrid({
         </div>
       );
     } else {
+      // Other appointment types (lunch, cleaning, supervision, etc.)
       return (
         <div 
           className={cn(
@@ -255,9 +324,11 @@ export default function ExcelScheduleGrid({
               <span>{appointmentType.icon}</span>
               <span>{group.title || appointmentType.label}</span>
             </div>
-            <div className="text-xs opacity-75 mt-1">
-              {format(new Date(group.startTime), 'h:mm')} - {format(new Date(group.endTime), 'h:mm a')}
-            </div>
+            {(serviceType === 'supervision' || totalSpan > 2) && (
+              <div className="text-xs opacity-75 mt-1">
+                {format(new Date(group.startTime), 'h:mm')} - {format(new Date(group.endTime), 'h:mm a')}
+              </div>
+            )}
           </div>
         </div>
       );
@@ -374,8 +445,8 @@ export default function ExcelScheduleGrid({
               </div>
 
               {isExpanded && (
-                <div className="overflow-x-auto">
-                  <div className="min-w-max">
+                <div className="overflow-x-auto relative">
+                  <div className="min-w-max relative">
                     {/* Grid Header */}
                     <div className="grid gap-0 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50" 
                          style={{gridTemplateColumns: `140px repeat(${teamMembers.length}, 120px)`}}>
@@ -417,7 +488,7 @@ export default function ExcelScheduleGrid({
                       <div 
                         key={timeSlot}
                         className={cn(
-                          "grid gap-0 border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 group",
+                          "grid gap-0 border-b border-gray-100 dark:border-gray-700/50 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 group relative overflow-visible",
                           slotIndex % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50/30 dark:bg-gray-800/50"
                         )}
                         style={{gridTemplateColumns: `140px repeat(${teamMembers.length}, 120px)`}}
@@ -436,6 +507,7 @@ export default function ExcelScheduleGrid({
                             <div 
                               key={member.id}
                               className="border-r border-gray-200 dark:border-gray-700 h-[40px] relative"
+                              style={{ isolation: 'isolate' }}
                             >
                               {renderCellContent(groupInfo, slotIndex, member.id, team.id, team.LeadBCBA?.id)}
                             </div>

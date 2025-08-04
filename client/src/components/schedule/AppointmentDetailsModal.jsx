@@ -2,6 +2,7 @@ import React from 'react';
 import { format, parseISO } from 'date-fns';
 import { Button } from '../ui/button';
 import { formatTime } from '../../utils/date-utils';
+import { getAppointmentType, requiresPatient } from '../../utils/appointmentTypes';
 
 export default function AppointmentDetailsModal({
   appointment,
@@ -12,6 +13,9 @@ export default function AppointmentDetailsModal({
   formatFullPatientName
 }) {
   if (!appointment) return null;
+
+  const appointmentType = getAppointmentType(appointment.serviceType);
+  const hasPatient = requiresPatient(appointment.serviceType) && appointment.patient;
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
@@ -24,12 +28,32 @@ export default function AppointmentDetailsModal({
         </div>
         
         <div className="space-y-4">
+          {/* Show service type with icon */}
           <div>
-            <h3 className="font-medium text-gray-700 dark:text-gray-300">Patient</h3>
-            <p className="text-lg">
-              {formatFullPatientName(appointment?.patient)}
+            <h3 className="font-medium text-gray-700 dark:text-gray-300">Service Type</h3>
+            <p className="text-lg flex items-center gap-2">
+              <span>{appointmentType.icon}</span>
+              <span>{appointmentType.label}</span>
             </p>
           </div>
+
+          {/* Only show patient if it's a patient-required service */}
+          {hasPatient && (
+            <div>
+              <h3 className="font-medium text-gray-700 dark:text-gray-300">Patient</h3>
+              <p className="text-lg">
+                {formatFullPatientName(appointment.patient)}
+              </p>
+            </div>
+          )}
+
+          {/* Show title for non-patient services */}
+          {!hasPatient && appointment.title && (
+            <div>
+              <h3 className="font-medium text-gray-700 dark:text-gray-300">Title</h3>
+              <p className="text-lg">{appointment.title}</p>
+            </div>
+          )}
           
           <div>
             <h3 className="font-medium text-gray-700 dark:text-gray-300">Therapist</h3>
@@ -72,12 +96,14 @@ export default function AppointmentDetailsModal({
             <Button variant="outline" onClick={onClose}>
               Close
             </Button>
-            <Button 
-              variant="default" 
-              onClick={onViewPatient}
-            >
-              View Patient
-            </Button>
+            {hasPatient && (
+              <Button 
+                variant="default" 
+                onClick={onViewPatient}
+              >
+                View Patient
+              </Button>
+            )}
             {canEdit && (
               <Button 
                 variant="default" 

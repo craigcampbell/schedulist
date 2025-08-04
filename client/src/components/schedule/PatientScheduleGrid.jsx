@@ -96,7 +96,7 @@ export default function PatientScheduleGrid({
   const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
     // Use provided location or find most common location from appointments
     const targetLocation = location || getMostCommonLocation(todaysAppointments);
-    return getLocationTimeSlots(targetLocation, 'simple');
+    return getLocationTimeSlots(targetLocation, 'excel');
   }, [location, todaysAppointments]);
 
   // Format names based on user role
