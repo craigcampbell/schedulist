@@ -75,6 +75,14 @@ module.exports = (sequelize, DataTypes) => {
         key: 'id'
       }
     },
+    slackUserId: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    videoLink: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
   }, {
     timestamps: true,
     hooks: {

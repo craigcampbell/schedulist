@@ -86,6 +86,8 @@ const getAllUsers = async (req, res) => {
       active: user.active,
       lastLogin: user.lastLogin,
       roles: user.Roles ? user.Roles.map(role => role.name) : [],
+      slackUserId: user.slackUserId,
+      videoLink: user.videoLink,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     }));
@@ -125,6 +127,8 @@ const getUserById = async (req, res) => {
       roles: user.Roles.map(role => role.name),
       locationIds: user.Locations.map(loc => loc.id),
       defaultLocationId: user.defaultLocationId,
+      slackUserId: user.slackUserId,
+      videoLink: user.videoLink,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     };
@@ -141,7 +145,7 @@ const getUserById = async (req, res) => {
  */
 const createUser = async (req, res) => {
   try {
-    const { firstName, lastName, email, password, phone, roles, locationIds, defaultLocationId, active } = req.body;
+    const { firstName, lastName, email, password, phone, roles, locationIds, defaultLocationId, active, slackUserId, videoLink } = req.body;
     
     // Check if user exists
     const userExists = await User.findOne({ where: { email } });
@@ -158,7 +162,9 @@ const createUser = async (req, res) => {
       phone,
       active: active !== undefined ? active : true,
       organizationId: req.user.organizationId,
-      defaultLocationId
+      defaultLocationId,
+      slackUserId: slackUserId || null,
+      videoLink: videoLink || null
     });
     
     // Assign roles
@@ -221,7 +227,7 @@ const createUser = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { firstName, lastName, email, phone, active, roles, locationIds, defaultLocationId, password } = req.body;
+    const { firstName, lastName, email, phone, active, roles, locationIds, defaultLocationId, password, slackUserId, videoLink } = req.body;
     
     const user = await User.findByPk(id);
     
@@ -261,6 +267,14 @@ const updateUser = async (req, res) => {
     if (defaultLocationId !== undefined && defaultLocationId !== user.defaultLocationId) {
       changes.push({ fieldName: 'defaultLocationId', oldValue: user.defaultLocationId, newValue: defaultLocationId });
       user.defaultLocationId = defaultLocationId;
+    }
+    if (slackUserId !== undefined && slackUserId !== user.slackUserId) {
+      changes.push({ fieldName: 'slackUserId', oldValue: user.slackUserId, newValue: slackUserId });
+      user.slackUserId = slackUserId || null;
+    }
+    if (videoLink !== undefined && videoLink !== user.videoLink) {
+      changes.push({ fieldName: 'videoLink', oldValue: user.videoLink, newValue: videoLink });
+      user.videoLink = videoLink || null;
     }
     if (password) {
       // Log password change separately with special action

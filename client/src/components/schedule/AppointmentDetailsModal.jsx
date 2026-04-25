@@ -3,6 +3,7 @@ import { format, parseISO } from 'date-fns';
 import { Button } from '../ui/button';
 import { formatTime } from '../../utils/date-utils';
 import { getAppointmentType, requiresPatient } from '../../utils/appointmentTypes';
+import ContactButtons from '../ContactButtons';
 
 export default function AppointmentDetailsModal({
   appointment,
@@ -62,7 +63,32 @@ export default function AppointmentDetailsModal({
                `${appointment?.therapist?.firstName || ''} ${appointment?.therapist?.lastName || ''}` || 
                'Unknown'}
             </p>
+            {appointment?.therapist && (
+              <ContactButtons
+                slackUserId={appointment.therapist.slackUserId}
+                videoLink={appointment.therapist.videoLink}
+                name={appointment.therapist.name}
+                size="xs"
+                className="mt-1"
+              />
+            )}
           </div>
+
+          {appointment?.bcba && (
+            <div>
+              <h3 className="font-medium text-gray-700 dark:text-gray-300">BCBA</h3>
+              <p className="text-lg">
+                {appointment.bcba.name || 'Unknown'}
+              </p>
+              <ContactButtons
+                slackUserId={appointment.bcba.slackUserId}
+                videoLink={appointment.bcba.videoLink}
+                name={appointment.bcba.name}
+                size="xs"
+                className="mt-1"
+              />
+            </div>
+          )}
           
           <div>
             <h3 className="font-medium text-gray-700 dark:text-gray-300">Date & Time</h3>

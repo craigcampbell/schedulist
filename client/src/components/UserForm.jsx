@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Save, User, Mail, Phone, MapPin, Building, Shield } from 'lucide-react';
+import { X, Save, User, Mail, Phone, MapPin, Building, Shield, MessageCircle, Video } from 'lucide-react';
 import { Button } from './ui/button';
 import { getLocations } from '../api/admin';
 
@@ -20,6 +20,8 @@ const UserForm = ({
     locationIds: [],
     active: true,
     defaultLocationId: '',
+    slackUserId: '',
+    videoLink: '',
     ...user // Override with existing user data if editing
   });
 
@@ -225,6 +227,51 @@ const UserForm = ({
           {errors.password && (
             <p className="text-red-500 text-sm mt-1">{errors.password}</p>
           )}
+        </div>
+      </div>
+
+      {/* Communication */}
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold flex items-center gap-2">
+          <MessageCircle className="h-5 w-5" />
+          Communication
+        </h3>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">
+              Slack User ID
+            </label>
+            <input
+              type="text"
+              name="slackUserId"
+              value={formData.slackUserId || ''}
+              onChange={handleInputChange}
+              className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800 font-mono text-sm"
+              placeholder="U01234567"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Find in Slack: Profile → More → Copy member ID
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1 flex items-center gap-1">
+              <Video className="h-3.5 w-3.5" />
+              Video Call Link
+            </label>
+            <input
+              type="url"
+              name="videoLink"
+              value={formData.videoLink || ''}
+              onChange={handleInputChange}
+              className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800 text-sm"
+              placeholder="https://meet.google.com/abc-defg-hij"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Google Meet or Zoom link for remote sessions
+            </p>
+          </div>
         </div>
       </div>
       

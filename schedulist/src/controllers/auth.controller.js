@@ -153,7 +153,9 @@ const login = async (req, res) => {
         roles: user.Roles.map(role => role.name),
         organizationId: user.organizationId,
         organization: organizationInfo,
-        isSuperAdmin: user.isSuperAdmin
+        isSuperAdmin: user.isSuperAdmin,
+        slackUserId: user.slackUserId,
+        videoLink: user.videoLink
       },
       token
     });
@@ -208,7 +210,9 @@ const getProfile = async (req, res) => {
         updatedAt: user.updatedAt,
         organizationId: user.organizationId,
         organization: organizationInfo,
-        isSuperAdmin: user.isSuperAdmin
+        isSuperAdmin: user.isSuperAdmin,
+        slackUserId: user.slackUserId,
+        videoLink: user.videoLink
       }
     });
     
@@ -223,7 +227,7 @@ const getProfile = async (req, res) => {
 const updateProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const { firstName, lastName, phone, currentPassword, newPassword } = req.body;
+    const { firstName, lastName, phone, slackUserId, videoLink, currentPassword, newPassword } = req.body;
     
     const user = await User.findByPk(userId);
     
@@ -235,6 +239,10 @@ const updateProfile = async (req, res) => {
     if (firstName) user.firstName = firstName;
     if (lastName) user.lastName = lastName;
     if (phone) user.phone = phone;
+    
+    // Update communication fields (allow clearing)
+    if (slackUserId !== undefined) user.slackUserId = slackUserId || null;
+    if (videoLink !== undefined) user.videoLink = videoLink || null;
     
     // If password change is requested
     if (currentPassword && newPassword) {

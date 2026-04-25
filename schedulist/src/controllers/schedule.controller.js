@@ -129,11 +129,15 @@ const getSchedule = async (req, res) => {
       } : null,
       therapist: appt.Therapist ? {
         id: appt.Therapist.id,
-        name: `${appt.Therapist.firstName} ${appt.Therapist.lastName}`
+        name: `${appt.Therapist.firstName} ${appt.Therapist.lastName}`,
+        slackUserId: appt.Therapist.slackUserId,
+        videoLink: appt.Therapist.videoLink
       } : null,
       bcba: appt.BCBA ? {
         id: appt.BCBA.id,
-        name: `${appt.BCBA.firstName} ${appt.BCBA.lastName}`
+        name: `${appt.BCBA.firstName} ${appt.BCBA.lastName}`,
+        slackUserId: appt.BCBA.slackUserId,
+        videoLink: appt.BCBA.videoLink
       } : null,
       location: appt.Location ? {
         id: appt.Location.id,
@@ -231,7 +235,9 @@ const getPatientSchedule = async (req, res) => {
       status: appt.status,
       therapist: appt.Therapist ? {
         id: appt.Therapist.id,
-        name: `${appt.Therapist.firstName} ${appt.Therapist.lastName}`
+        name: `${appt.Therapist.firstName} ${appt.Therapist.lastName}`,
+        slackUserId: appt.Therapist.slackUserId,
+        videoLink: appt.Therapist.videoLink
       } : null,
       location: appt.Location ? {
         id: appt.Location.id,

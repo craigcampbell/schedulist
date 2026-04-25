@@ -46,7 +46,7 @@ const getTherapists = async (req, res) => {
           required: false
         }
       ],
-      attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'active', 'createdAt', 'updatedAt'],
+      attributes: ['id', 'firstName', 'lastName', 'email', 'phone', 'active', 'slackUserId', 'videoLink', 'createdAt', 'updatedAt'],
       order: [['lastName', 'ASC'], ['firstName', 'ASC']]
     });
     
@@ -60,6 +60,8 @@ const getTherapists = async (req, res) => {
         email: therapist.email,
         phone: therapist.phone,
         active: therapist.active,
+        slackUserId: therapist.slackUserId,
+        videoLink: therapist.videoLink,
         createdAt: therapist.createdAt,
         updatedAt: therapist.updatedAt,
         roles: roles,
