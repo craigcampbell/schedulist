@@ -1,6 +1,5 @@
 const { User, Role, Patient, Appointment } = require('../models');
 const { Op } = require('sequelize');
-const sequelize = require('sequelize');
 
 /**
  * Get all therapists managed by this BCBA

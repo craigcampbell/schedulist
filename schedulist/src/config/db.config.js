@@ -6,7 +6,7 @@ module.exports = {
     port: process.env.DB_PORT || 5432,
     database: process.env.DB_NAME || 'schedulist',
     username: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
+    password: process.env.DB_PASS || process.env.DB_PASSWORD || 'postgres',
     dialect: 'postgres',
     logging: false,
   },
@@ -15,7 +15,7 @@ module.exports = {
     port: process.env.DB_PORT || 5432,
     database: process.env.TEST_DB_NAME || 'schedulist_test',
     username: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'postgres',
+    password: process.env.DB_PASS || process.env.DB_PASSWORD || 'postgres',
     dialect: 'postgres',
     logging: false,
   },
@@ -24,7 +24,7 @@ module.exports = {
     port: process.env.DB_PORT,
     database: process.env.DB_NAME,
     username: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
+    password: process.env.DB_PASS || process.env.DB_PASSWORD,
     dialect: 'postgres',
     dialectOptions: {
       ssl: {

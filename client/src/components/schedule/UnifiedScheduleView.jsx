@@ -45,16 +45,6 @@ export default function UnifiedScheduleView({
   onAppointmentClick = () => {},
   userRole = null
 }) {
-  // Debug logging
-  console.log('UnifiedScheduleView props:', {
-    appointments: appointments?.length || 0,
-    patients: patients?.length || 0,
-    therapists: therapists?.length || 0,
-    selectedDate,
-    userRole
-  });
-  console.log('Sample appointment:', appointments?.[0]);
-  console.log('Sample patient:', patients?.[0]);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPatient, setSelectedPatient] = useState('');
   const [selectedTherapist, setSelectedTherapist] = useState('');
@@ -149,7 +139,6 @@ export default function UnifiedScheduleView({
       schedule.gaps = [];
     });
     
-    console.log('Patient schedules:', schedules);
     return schedules;
   }, [todaysAppointments, patients]);
 
@@ -183,8 +172,6 @@ export default function UnifiedScheduleView({
       return schedule.appointments.length > 0; // Only show patients with appointments today
     });
   }, [patientSchedules, searchQuery, selectedPatient, selectedTherapist, showGapsOnly]);
-
-  console.log('Filtered schedules:', filteredSchedules.length, filteredSchedules);
 
   // Get time slot position for an appointment
   const getTimeSlotPosition = (timeString) => {
@@ -302,7 +289,7 @@ export default function UnifiedScheduleView({
         </div>
 
         <DragDropContext onDragEnd={handleDragEnd}>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
             <div className="min-w-[800px]">
               {/* Time header */}
               <div className="grid grid-cols-[200px_repeat(20,60px)] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700">
@@ -317,7 +304,7 @@ export default function UnifiedScheduleView({
               </div>
 
               {/* Patient rows */}
-              {console.log('Rendering schedules:', filteredSchedules.length) || filteredSchedules.map(schedule => (
+              {filteredSchedules.map(schedule => (
                 <Droppable key={schedule.patient.id} droppableId={`patient-${schedule.patient.id}`} direction="horizontal">
                   {(provided) => (
                     <div 

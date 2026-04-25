@@ -1,0 +1,13 @@
+node_modules/
+npm-debug.log
+.env
+.env.local
+uploads/
+.git
+*.md
+test-*.js
+debug-*.js
+create-*.js
+check-*.js
+diagnose-*.js
+fix-*.js

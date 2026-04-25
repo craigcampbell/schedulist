@@ -26,7 +26,7 @@ export default function DailyScheduleView({
               Add
             </Button>
           </div>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
             {Object.values(therapistGroups).length > 0 ? (
               <div className="schedule-grid min-w-[600px]">
                 {/* Time column */}
@@ -121,7 +121,7 @@ export default function DailyScheduleView({
               Add
             </Button>
           </div>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
             {Object.values(patientGroups).length > 0 ? (
               <div className="schedule-grid min-w-[600px]">
                 {/* Time column */}

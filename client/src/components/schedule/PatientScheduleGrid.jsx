@@ -641,7 +641,7 @@ export default function PatientScheduleGrid({
           </div>
 
           {/* Time slots and appointments */}
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
             <div className="min-w-max">
               <div className="grid grid-cols-[100px_1fr] gap-0">
                 {/* Time column header */}
@@ -866,7 +866,7 @@ export default function PatientScheduleGrid({
             </div>
           )}
           
-          <div className="h-full overflow-x-auto">
+          <div className="h-full overflow-x-auto" style={{ overflowY: 'visible' }}>
             <div 
               className={cn(
                 `flex ${getLayoutDimensions().gap} min-w-max h-full transition-all duration-300`,
@@ -1217,7 +1217,7 @@ export default function PatientScheduleGrid({
               </div>
 
               {isExpanded && (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
                   <div className="min-w-max">
                     {/* Time Slot Grid */}
                     <div className="grid grid-cols-[140px_1fr] gap-0">

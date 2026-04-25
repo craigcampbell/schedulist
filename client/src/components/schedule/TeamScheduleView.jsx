@@ -563,7 +563,7 @@ export default function TeamScheduleView({
               </div>
 
               {isExpanded && (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
                   <div className="min-w-[800px]">
                     {/* Header rows with day, date, and therapist names */}
                     <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700">

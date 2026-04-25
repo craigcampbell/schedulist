@@ -409,8 +409,10 @@ export default function BCBASchedulePage() {
         patientId: formState.patientId,
         therapistId: formState.therapistId,
         startTime: startDateTime,
-        endTime: endDateTime
-      }, allAppointments);
+        endTime: endDateTime,
+        locationId: finalLocationId,
+        serviceType: formState.serviceType
+      }, allAppointments, locations || []);
 
       if (!validation.isValid) {
         const messages = formatConflictMessages(validation);

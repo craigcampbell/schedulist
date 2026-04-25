@@ -1,0 +1,63 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASS:-postgres}
+      POSTGRES_DB: ${DB_NAME:-schedulist}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-schedulist}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./schedulist
+      dockerfile: Dockerfile
+    environment:
+      - PORT=5050
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-schedulist}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASS=${DB_PASS:-postgres}
+      - JWT_SECRET=${JWT_SECRET:-dev-jwt-secret-do-not-use-in-production-2024}
+      - JWT_EXPIRES_IN=24h
+      - NODE_ENV=development
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-9a0d9caa501c0462e8cc5ebdde162e37536bc1d71628b15c60919b582d9bd53e}
+      - ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
+    ports:
+      - "5050:5050"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./schedulist:/app
+      - /app/node_modules
+      - uploads_data:/app/uploads
+    command: npx nodemon src/index.js
+
+  frontend:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    environment:
+      - VITE_API_URL=http://localhost:5050
+      - VITE_API_BASE=http://backend:5050
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+
+volumes:
+  postgres_data:
+  uploads_data:

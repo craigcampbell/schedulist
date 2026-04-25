@@ -29,6 +29,12 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true,
     },
+    locationType: {
+      type: DataTypes.ENUM('clinic', 'home', 'school'),
+      allowNull: false,
+      defaultValue: 'clinic',
+      comment: 'Type of location: clinic (in-clinic), home (patient home/remote), school (school-based)'
+    },
     active: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,

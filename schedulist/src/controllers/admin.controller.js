@@ -1,6 +1,5 @@
 const { User, Role, Location, Patient, Appointment, Audit } = require('../models');
 const { Op } = require('sequelize');
-const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 
@@ -364,6 +363,7 @@ const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
     const { deactivateOnly = true } = req.query;
+    const shouldDeactivate = deactivateOnly === true || deactivateOnly === 'true';
     
     const user = await User.findByPk(id);
     
@@ -371,7 +371,7 @@ const deleteUser = async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
     
-    if (deactivateOnly === 'true') {
+    if (shouldDeactivate) {
       // Soft delete by setting active to false
       user.active = false;
       await user.save();
@@ -530,6 +530,7 @@ const deleteLocation = async (req, res) => {
   try {
     const { id } = req.params;
     const { deactivateOnly = true } = req.query;
+    const shouldDeactivate = deactivateOnly === true || deactivateOnly === 'true';
     
     const location = await Location.findByPk(id);
     
@@ -542,13 +543,13 @@ const deleteLocation = async (req, res) => {
       where: { locationId: id }
     });
     
-    if (appointmentCount > 0 && deactivateOnly !== 'true') {
+    if (appointmentCount > 0 && !shouldDeactivate) {
       return res.status(400).json({
         message: 'Cannot delete location with associated appointments. Deactivate instead.'
       });
     }
     
-    if (deactivateOnly === 'true') {
+    if (shouldDeactivate) {
       // Soft delete by setting active to false
       location.active = false;
       await location.save();

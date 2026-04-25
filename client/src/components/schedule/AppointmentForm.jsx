@@ -143,24 +143,37 @@ export default function AppointmentForm({
               </select>
             </div>
             
-            {/* Location Selection - Optional for therapist scheduling */}
-            {user?.roles?.includes('admin') && (
-              <div>
-                <label className="block text-sm font-medium mb-1">Location</label>
-                <select 
-                  className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                  value={formState.locationId || ''}
-                  onChange={(e) => setFormState({...formState, locationId: e.target.value})}
-                >
-                  <option value="">Select a location</option>
-                  {locations?.map(location => (
+            {/* Location Selection - Required for proper travel time and scheduling */}
+            <div>
+              <label className="block text-sm font-medium mb-1">Location *</label>
+              <select 
+                className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
+                value={formState.locationId || ''}
+                onChange={(e) => setFormState({...formState, locationId: e.target.value})}
+                required
+              >
+                <option value="">Select a location</option>
+                {locations?.map(location => {
+                  const typeLabel = location.locationType === 'home' ? '(Home/Remote)' :
+                                    location.locationType === 'school' ? '(School)' : '';
+                  return (
                     <option key={location.id} value={location.id}>
-                      {location.name}
+                      {location.name} {typeLabel}
                     </option>
-                  ))}
-                </select>
-              </div>
-            )}
+                  );
+                })}
+              </select>
+              {formState.locationId && locations?.length > 0 && (
+                <p className="text-xs text-gray-500 mt-1">
+                  {(() => {
+                    const loc = locations.find(l => l.id === formState.locationId);
+                    if (loc?.locationType === 'home') return 'Remote/home visit - allow 30 min travel time';
+                    if (loc?.locationType === 'school') return 'School visit - allow 25 min travel time';
+                    return 'In-clinic visit';
+                  })()}
+                </p>
+              )}
+            </div>
           </div>
           
           {/* Scheduling Options */}

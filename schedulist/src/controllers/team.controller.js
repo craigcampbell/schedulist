@@ -1,4 +1,4 @@
-const { Team, User, Patient, Role } = require('../models');
+const { Team, User, Role } = require('../models');
 const { Op } = require('sequelize');
 
 // Get all teams for a BCBA's organization

@@ -173,7 +173,7 @@ const ContractFulfillmentView = ({ patients = [], appointments = [] }) => {
           <h3 className="text-lg font-medium">Contract Fulfillment Details</h3>
         </div>
         
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
           <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead className="bg-gray-50 dark:bg-gray-800">
               <tr>

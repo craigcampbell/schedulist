@@ -585,7 +585,7 @@ export default function EnhancedScheduleView(props) {
               </div>
               
               {isExpanded && (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
                   <Droppable droppableId={`team-${team.id}`} direction="vertical">
                     {(provided) => (
                       <div 

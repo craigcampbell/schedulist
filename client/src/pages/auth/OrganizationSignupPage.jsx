@@ -29,7 +29,7 @@ export default function OrganizationSignupPage() {
     
     if (!formData.name) newErrors.name = 'Organization name is required';
     if (!formData.slug) newErrors.slug = 'Organization slug is required';
-    else if (!/^[a-z0-9\-]+$/i.test(formData.slug)) {
+    else if (!/^[a-z0-9-]+$/i.test(formData.slug)) {
       newErrors.slug = 'Slug must contain only letters, numbers, and hyphens';
     }
     
@@ -61,8 +61,8 @@ export default function OrganizationSignupPage() {
       const autoSlug = value
         .toLowerCase()
         .replace(/\s+/g, '-')
-        .replace(/[^\w\-]+/g, '')
-        .replace(/\-\-+/g, '-')
+        .replace(/[^\w-]+/g, '')
+        .replace(/-{2,}/g, '-')
         .substring(0, 50);
       
       setFormData({

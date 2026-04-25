@@ -65,7 +65,7 @@ apiClient.interceptors.response.use(
       });
       
       // Display detailed error in development
-      if (process.env.NODE_ENV !== 'production') {
+      if (import.meta.env.DEV) {
         // Add debugging information to the error object
         error.debug = {
           url: error.config?.url,

@@ -445,7 +445,7 @@ export default function ExcelScheduleGrid({
               </div>
 
               {isExpanded && (
-                <div className="overflow-x-auto relative">
+                <div className="overflow-x-auto relative" style={{ overflowY: 'visible' }}>
                   <div className="min-w-max relative">
                     {/* Grid Header */}
                     <div className="grid gap-0 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50" 

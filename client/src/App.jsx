@@ -1,4 +1,3 @@
-import { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/auth-context';
 import SignupDefault from './pages/signup/default';
@@ -42,7 +41,7 @@ import SubscriptionRequiredPage from './pages/SubscriptionRequiredPage';
 
 // Protected Route Component
 const ProtectedRoute = ({ children, requiredRoles = [], requireSubscription = true }) => {
-  const { user, loading, hasActiveSubscription, subscriptionRequired } = useAuth();
+  const { user, loading, hasActiveSubscription } = useAuth();
   
   if (loading) {
     return <div>Loading...</div>;

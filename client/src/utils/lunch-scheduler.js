@@ -1,4 +1,4 @@
-import { format, addMinutes, parseISO } from 'date-fns';
+import { format } from 'date-fns';
 
 // Standard lunch time slots (11:00 AM - 1:30 PM)
 const LUNCH_TIME_SLOTS = [

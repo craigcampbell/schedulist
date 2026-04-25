@@ -123,7 +123,7 @@ export const generateTimeSlotRanges = (timeSlots, format = 'excel') => {
     let currentMinutes, endMinutes;
     
     switch (format) {
-      case 'excel':
+      case 'excel': {
         // Format: "7:30 AM"
         const currentTime24 = convert12HourTo24Hour(slot);
         currentMinutes = timeStringToMinutes(currentTime24);
@@ -134,8 +134,9 @@ export const generateTimeSlotRanges = (timeSlots, format = 'excel') => {
           endMinutes = currentMinutes + 30;
         }
         break;
+      }
         
-      case 'range':
+      case 'range': {
         // Format: "7:30-8:00 AM"
         const [startTime, endTime] = slot.split('-');
         const period = slot.includes('PM') ? 'PM' : 'AM';
@@ -144,13 +145,15 @@ export const generateTimeSlotRanges = (timeSlots, format = 'excel') => {
         currentMinutes = timeStringToMinutes(startTime24);
         endMinutes = timeStringToMinutes(endTime24);
         break;
+      }
         
-      case 'simple':
+      case 'simple': {
         // Format: "7:30-8:00"
         const [start, end] = slot.split('-');
         currentMinutes = timeStringToMinutes(start);
         endMinutes = timeStringToMinutes(end);
         break;
+      }
         
       default:
         currentMinutes = 0;
@@ -240,8 +243,6 @@ export const calculateAppointmentSpan = (appointment, timeSlots, timeSlotRanges)
   
   const start = new Date(appointment.startTime);
   const end = new Date(appointment.endTime);
-  const durationMinutes = (end - start) / (1000 * 60);
-  
   // Find how many slots this duration spans
   let span = 1;
   let currentTime = start;

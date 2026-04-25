@@ -120,6 +120,7 @@ const getSchedule = async (req, res) => {
       startTime: appt.startTime,
       endTime: appt.endTime,
       status: appt.status,
+      serviceType: appt.serviceType,
       patient: appt.Patient ? {
         id: appt.Patient.id,
         firstName: appt.Patient.firstName,
@@ -484,7 +485,9 @@ const createAppointment = async (req, res) => {
         patientId,
         therapistId: therapistId && therapistId !== '' ? therapistId : null,
         startTime: appointmentStart,
-        endTime: appointmentEnd
+        endTime: appointmentEnd,
+        locationId,
+        serviceType
       });
 
       if (!validation.isValid) {
@@ -578,7 +581,9 @@ const updateAppointment = async (req, res) => {
         patientId: appointment.patientId,
         therapistId: therapistId || appointment.therapistId,
         startTime: new Date(startTime || appointment.startTime),
-        endTime: new Date(endTime || appointment.endTime)
+        endTime: new Date(endTime || appointment.endTime),
+        locationId: locationId || appointment.locationId,
+        serviceType: appointment.serviceType
       }, id); // Pass appointment ID to exclude from conflict check
 
       if (!validation.isValid) {
