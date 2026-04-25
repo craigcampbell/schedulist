@@ -13,9 +13,11 @@ import {
   Key,
   ChevronLeft,
   ChevronRight,
-  RefreshCw
+  RefreshCw,
+  RotateCcw
 } from 'lucide-react';
 import { Button } from './ui/button';
+import apiClient from '../api/client';
 
 const AuditTrail = () => {
   const [filters, setFilters] = useState({
@@ -315,6 +317,29 @@ const AuditTrail = () => {
                             <pre className="mt-1 text-xs bg-gray-100 dark:bg-gray-800 p-2 rounded overflow-auto">
                               {JSON.stringify(audit.metadata, null, 2)}
                             </pre>
+                          </div>
+                        )}
+                        
+                        {/* Restore button for deleted appointments */}
+                        {audit.entityType === 'Appointment' && audit.action === 'delete' && audit.metadata?.snapshot && (
+                          <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="bg-green-600 hover:bg-green-700 text-white"
+                              onClick={async () => {
+                                try {
+                                  await apiClient.post(`/schedule/restore/${audit.id}`);
+                                  alert('Appointment restored successfully! Refresh the page to see changes.');
+                                  refetch();
+                                } catch (err) {
+                                  alert('Failed to restore: ' + (err.response?.data?.message || err.message));
+                                }
+                              }}
+                            >
+                              <RotateCcw className="h-4 w-4 mr-1" />
+                              Restore Appointment
+                            </Button>
                           </div>
                         )}
                       </div>

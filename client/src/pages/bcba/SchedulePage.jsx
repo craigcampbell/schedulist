@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../../context/auth-context';
+import { useModal } from '../../context/modal-context';
 import { useLocation } from 'react-router-dom';
-import { format, addDays, subDays, startOfDay, isSameDay, parseISO, addMinutes } from 'date-fns';
+import { format, addDays, subDays, startOfDay, isSameDay, parseISO } from 'date-fns';
+import apiClient from '../../api/client';
 import { validateAppointmentClient, formatConflictMessages } from '../../utils/conflictDetection';
 import { 
   Calendar, 
@@ -18,7 +20,10 @@ import {
   Users,
   Settings,
   Coffee,
-  BarChart3
+  BarChart3,
+  AlertTriangle,
+  Undo2,
+  Save
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -62,6 +67,7 @@ export default function BCBASchedulePage() {
   const { user } = useAuth();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const modal = useModal();
   
   // Get user's default location
   const getUserDefaultLocation = () => {
@@ -112,6 +118,8 @@ export default function BCBASchedulePage() {
   const [isCheckingAvailability, setIsCheckingAvailability] = useState(false);
   const [isSubmittingForm, setIsSubmittingForm] = useState(false);
   const [isFormPreFilled, setIsFormPreFilled] = useState(false);
+  const [pendingChanges, setPendingChanges] = useState([]); // [{ appointmentId, originalStartTime, originalEndTime, newStartTime, therapistId }]
+  const [isCommitting, setIsCommitting] = useState(false);
   const [formState, setFormState] = useState({
     patientId: '',
     therapistId: '',
@@ -185,13 +193,22 @@ export default function BCBASchedulePage() {
     const therapistName = therapists?.find(t => t.id === therapistId)?.firstName || 'Unknown';
     const bcbaToAssign = leadBcbaId || user?.id || '';
 
+    // Robust time parsing - supports "7:30-8:00 AM", "7:30 AM - 8:00 AM", "07:30-08:00"
+    const timeMatch = timeSlot.match(/(\d{1,2}:\d{2})\s*(?:AM|PM)?\s*[-–]\s*(\d{1,2}:\d{2})\s*(AM|PM)?/i);
+    let startTimeStr = '08:00';
+    let endTimeStr = '08:30';
+    if (timeMatch) {
+      startTimeStr = timeMatch[1];
+      endTimeStr = timeMatch[2];
+    }
+
     setFormState({
       ...formState,
       therapistId: therapistId || '',
       bcbaId: bcbaToAssign,
       date: format(selectedDate, 'yyyy-MM-dd'),
-      startTime: timeSlot.split(' - ')[0],
-      endTime: timeSlot.split(' - ')[1] || addMinutes(parseISO(`2000-01-01T${timeSlot.split(' - ')[0]}`), 30).toISOString().slice(11, 16),
+      startTime: startTimeStr,
+      endTime: endTimeStr,
       locationId: selectedLocation || defaultLocation || ''
     });
     setIsFormPreFilled(true);
@@ -199,6 +216,76 @@ export default function BCBASchedulePage() {
   };
 
   const closeAppointmentDetails = () => setSelectedAppointment(null);
+
+  const handleAppointmentMove = (appointmentId, newStartISO, newTherapistId) => {
+    if (!canEditSelectedTeam) return;
+    
+    setPendingChanges(prev => {
+      const existing = prev.find(c => c.appointmentId === appointmentId);
+      if (existing) {
+        return prev.map(c => c.appointmentId === appointmentId
+          ? { ...c, newStartTime: newStartISO, therapistId: newTherapistId || c.therapistId, movedAt: new Date().toISOString() }
+          : c
+        );
+      }
+      // Find original appointment data from schedule data
+      const allApps = teamScheduleData?.appointments || scheduleData?.appointments || [];
+      const origAppt = allApps.find(a => a.id === appointmentId);
+      return [...prev, {
+        appointmentId,
+        originalStartTime: origAppt?.startTime || newStartISO,
+        originalEndTime: origAppt?.endTime || null,
+        newStartTime: newStartISO,
+        therapistId: newTherapistId || origAppt?.therapistId,
+        movedAt: new Date().toISOString()
+      }];
+    });
+  };
+
+  const undoChanges = () => {
+    setPendingChanges([]);
+    queryClient.invalidateQueries({ queryKey: ['bcbaSchedule'] });
+    queryClient.invalidateQueries({ queryKey: ['teamSchedule'] });
+  };
+
+  const commitChanges = async () => {
+    if (pendingChanges.length === 0) return;
+    setIsCommitting(true);
+    try {
+      const results = await Promise.allSettled(
+        pendingChanges.map(async (change) => {
+          const origStart = new Date(change.originalStartTime);
+          const origEnd = new Date(change.originalEndTime);
+          const newStart = new Date(change.newStartTime);
+          const duration = origEnd ? (origEnd - origStart) : 30 * 60 * 1000;
+          const newEnd = new Date(newStart.getTime() + duration);
+          
+          return apiClient.put(`/schedule/${change.appointmentId}`, {
+            startTime: newStart.toISOString(),
+            endTime: newEnd.toISOString(),
+            therapistId: change.therapistId
+          });
+        })
+      );
+      
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed > 0) {
+        const firstError = results.find(r => r.status === 'rejected')?.reason;
+        const errMsg = firstError?.response?.data?.message || firstError?.message || 'Unknown error';
+        modal.alert(`${failed} change(s) failed to save. Error: ${errMsg}`, 'Commit Results', 'warning');
+      } else {
+        modal.alert('All schedule changes committed successfully!', 'Schedule Saved', 'success');
+      }
+      
+      setPendingChanges([]);
+      queryClient.invalidateQueries({ queryKey: ['bcbaSchedule'] });
+      queryClient.invalidateQueries({ queryKey: ['teamSchedule'] });
+    } catch (err) {
+      modal.alert('Failed to commit changes: ' + (err.response?.data?.message || err.message), 'Error', 'error');
+    } finally {
+      setIsCommitting(false);
+    }
+  };
 
   const openEditForm = (appointment) => {
     const startDate = parseISO(appointment.startTime);
@@ -423,7 +510,10 @@ export default function BCBASchedulePage() {
       // Show warnings but allow user to continue
       if (validation.warnings.length > 0) {
         const messages = formatConflictMessages(validation);
-        console.log('Appointment warnings:', messages.warnings);
+        const warningText = messages.warnings.join('\n');
+        if (warningText) {
+          modal.alert(warningText, 'Scheduling Warnings', 'warning');
+        }
       }
     }
     
@@ -758,6 +848,44 @@ export default function BCBASchedulePage() {
           </p>
         </div>
       )}
+
+      {/* Commit / Undo Bar */}
+      {pendingChanges.length > 0 && (
+        <div className="sticky top-0 z-50 mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/30 border-2 border-yellow-400 rounded-lg flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
+            <span className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+              {pendingChanges.length} unsaved change{pendingChanges.length !== 1 ? 's' : ''} pending
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={undoChanges}
+              disabled={isCommitting}
+            >
+              <Undo2 className="h-4 w-4 mr-1" />
+              Undo All
+            </Button>
+            <Button
+              size="sm"
+              onClick={commitChanges}
+              disabled={isCommitting}
+              className="bg-green-600 hover:bg-green-700 text-white"
+            >
+              {isCommitting ? (
+                <>Saving...</>
+              ) : (
+                <>
+                  <Save className="h-4 w-4 mr-1" />
+                  Commit Schedule
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
       
       {/* Loading state */}
       {isLoading && (
@@ -795,12 +923,12 @@ export default function BCBASchedulePage() {
               patients={patients || []}
               selectedDate={selectedDate}
               onAppointmentClick={handleAppointmentClick}
-              onCellClick={({ therapistId, timeSlot, selectedDate }) => {
-                handleCellClick({ therapistId, timeSlot, selectedDate });
+              onAppointmentMove={handleAppointmentMove}
+              onCellClick={({ therapistId, timeSlot, selectedDate, teamId, leadBcbaId }) => {
+                handleCellClick({ therapistId, timeSlot, selectedDate, teamId, leadBcbaId });
               }}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               viewMode="team"
-              canEdit={canEditSelectedTeam}
               location={selectedLocation}
             />
           )}

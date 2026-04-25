@@ -46,7 +46,7 @@ router.post(
   [
     check('patientId', 'Patient ID is required').not().isEmpty(),
     check('therapistId', 'Therapist ID is required').not().isEmpty(),
-    check('locationId', 'Location ID is required').not().isEmpty(),
+    // locationId is optional - will auto-assign if not provided
     // Skip start/end time validation when using next available slot
     check('startTime').custom((value, { req }) => {
       if (!req.body.useNextAvailableSlot && !value) {
@@ -88,6 +88,13 @@ router.delete(
   '/:id',
   isBCBA,
   scheduleController.deleteAppointment
+);
+
+// Restore a deleted appointment from audit log
+router.post(
+  '/restore/:auditId',
+  isBCBA,
+  scheduleController.restoreAppointment
 );
 
 // Get team-based schedule

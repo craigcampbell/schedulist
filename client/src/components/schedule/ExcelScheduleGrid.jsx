@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { format, parseISO, isSameDay } from 'date-fns';
 import { 
   Clock, 
@@ -39,6 +39,7 @@ export default function ExcelScheduleGrid({
   selectedDate,
   onAppointmentClick = () => {},
   onCellClick = () => {},
+  onAppointmentMove = () => {},
   userRole = 'bcba',
   viewMode = 'team', // 'team', 'therapist', 'patient'
   location = null // Add location prop for location-specific time slots
@@ -46,6 +47,8 @@ export default function ExcelScheduleGrid({
   const [expandedTeams, setExpandedTeams] = useState({});
   const [selectedView, setSelectedView] = useState(viewMode);
   const [showValidationWarnings, setShowValidationWarnings] = useState(true);
+  const [draggedAppointment, setDraggedAppointment] = useState(null);
+  const [dragOverSlot, setDragOverSlot] = useState(null);
 
   // Get appointments for selected date
   const todaysAppointments = useMemo(() => {
@@ -195,10 +198,13 @@ export default function ExcelScheduleGrid({
 
   // Render cell content based on appointment group
   const renderCellContent = (groupInfo, slotIndex, therapistId, teamId, leadBcbaId) => {
+    const slotDropKey = `${therapistId}-${slotIndex}`;
+    const isDragOver = dragOverSlot === slotDropKey;
+
     if (!groupInfo) {
       return (
         <div 
-          className="w-full h-full flex items-center justify-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50"
+          className={`w-full h-full flex items-center justify-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 ${isDragOver ? 'bg-blue-100 dark:bg-blue-900/40 ring-2 ring-blue-400' : ''}`}
           onClick={() => {
             // Convert time slot to expected format "7:30-8:00 AM"
             const currentSlot = TIME_SLOTS[slotIndex];
@@ -221,8 +227,31 @@ export default function ExcelScheduleGrid({
               leadBcbaId
             });
           }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            setDragOverSlot(slotDropKey);
+          }}
+          onDragLeave={() => setDragOverSlot(null)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOverSlot(null);
+            try {
+              const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+              const currentSlot = TIME_SLOTS[slotIndex];
+              const currentTime = currentSlot.replace(' AM', '').replace(' PM', '');
+              const period = currentSlot.includes('PM') || (currentSlot.includes('12:') && !currentSlot.includes('AM')) ? 'PM' : 'AM';
+              const hour = parseInt(currentTime.split(':')[0], 10);
+              const minute = parseInt(currentTime.split(':')[1], 10);
+              const newStart = new Date(selectedDate);
+              newStart.setHours(period === 'PM' && hour !== 12 ? hour + 12 : (period === 'AM' && hour === 12 ? 0 : hour), minute, 0, 0);
+              onAppointmentMove(data.appointmentId, newStart.toISOString(), therapistId);
+            } catch (err) {
+              console.error('Drop failed:', err);
+            }
+          }}
         >
-          <Plus className="h-3 w-3 text-gray-400 opacity-0 group-hover:opacity-100" />
+          <Plus className={`h-3 w-3 ${isDragOver ? 'text-blue-500 opacity-100' : 'text-gray-400 opacity-0 group-hover:opacity-100'}`} />
         </div>
       );
     }
@@ -245,7 +274,7 @@ export default function ExcelScheduleGrid({
     const appointmentStart = new Date(group.startTime);
     const appointmentStartMinutes = appointmentStart.getHours() * 60 + appointmentStart.getMinutes();
     const slotRange = TIME_SLOT_RANGES[TIME_SLOTS[slotIndex]];
-    let topOffset = 2; // Default 2px padding
+    let topOffset = 1; // Tight fit within cell
     
     if (slotRange) {
       // Calculate how many minutes into the slot this appointment starts
@@ -253,12 +282,12 @@ export default function ExcelScheduleGrid({
       
       // Convert to pixels (40px per 30 minutes)
       if (minutesIntoSlot > 0 && minutesIntoSlot < 30) {
-        topOffset = 2 + (minutesIntoSlot / 30) * 40;
+        topOffset = 1 + (minutesIntoSlot / 30) * 40;
       }
     }
     
-    // Calculate the height based on how many slots it spans
-    const appointmentHeight = totalSpan * 40 - 4; // 40px per slot minus padding
+    // Calculate the height based on how many slots it spans (account for row borders)
+    const appointmentHeight = totalSpan * 40 + (totalSpan - 1) * 1 - 2; // 40px per slot + borders - padding
     
     const heightStyle = {
       height: `${appointmentHeight}px`,
@@ -278,13 +307,28 @@ export default function ExcelScheduleGrid({
       
       return (
         <div 
-          className="p-2 rounded-lg border-2 cursor-pointer hover:shadow-md transition-all bg-white dark:bg-gray-800"
+          className="p-2 rounded-lg border-2 cursor-grab active:cursor-grabbing hover:shadow-md transition-all bg-white dark:bg-gray-800"
           style={{ 
             ...heightStyle,
             borderColor: patientColor,
-            backgroundColor: `${patientColor}15` // 15 is hex for ~9% opacity
+            backgroundColor: `${patientColor}15`, // 15 is hex for ~9% opacity
+            opacity: draggedAppointment?.id === group.appointments[0]?.id ? 0.4 : 1
           }}
           onClick={() => onAppointmentClick(group.appointments[0])}
+          draggable={true}
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', JSON.stringify({
+              appointmentId: group.appointments[0]?.id,
+              therapistId: therapistId,
+              teamId: teamId
+            }));
+            setDraggedAppointment({ id: group.appointments[0]?.id, startTime: group.startTime, endTime: group.endTime });
+          }}
+          onDragEnd={() => {
+            setDraggedAppointment(null);
+            setDragOverSlot(null);
+          }}
           title={`${patient ? formatFullPatientName(patient) : 'Direct Service'} - ${format(new Date(group.startTime), 'h:mm a')} to ${format(new Date(group.endTime), 'h:mm a')}`}
         >
           <div className="flex flex-col h-full justify-center items-center text-center">
@@ -309,14 +353,31 @@ export default function ExcelScheduleGrid({
       return (
         <div 
           className={cn(
-            "p-2 rounded-lg border-2 cursor-pointer transition-all",
+            "p-2 rounded-lg border-2 cursor-grab active:cursor-grabbing transition-all",
             colors.bg,
             colors.text,
             colors.border,
             colors.hover
           )}
-          style={heightStyle}
+          style={{
+            ...heightStyle,
+            opacity: draggedAppointment?.id === group.appointments[0]?.id ? 0.4 : 1
+          }}
           onClick={() => onAppointmentClick(group.appointments[0])}
+          draggable={true}
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', JSON.stringify({
+              appointmentId: group.appointments[0]?.id,
+              therapistId: therapistId,
+              teamId: teamId
+            }));
+            setDraggedAppointment({ id: group.appointments[0]?.id, startTime: group.startTime, endTime: group.endTime });
+          }}
+          onDragEnd={() => {
+            setDraggedAppointment(null);
+            setDragOverSlot(null);
+          }}
           title={`${appointmentType.label} - ${format(new Date(group.startTime), 'h:mm a')} to ${format(new Date(group.endTime), 'h:mm a')}`}
         >
           <div className="flex flex-col h-full items-center justify-center text-center">
@@ -526,23 +587,23 @@ export default function ExcelScheduleGrid({
       {/* Legend */}
       <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
         <h4 className="font-semibold text-gray-900 dark:text-white mb-3">Legend</h4>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-gray-700 dark:text-gray-300">
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-blue-100 border-2 border-blue-300 rounded"></div>
+            <div className="w-4 h-4 bg-blue-100 dark:bg-blue-900/40 border-2 border-blue-300 dark:border-blue-700 rounded"></div>
             <span>Patient Session</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-green-100 border border-green-400 rounded flex items-center justify-center">
+            <div className="w-4 h-4 bg-green-100 dark:bg-green-900/40 border border-green-400 dark:border-green-600 rounded flex items-center justify-center">
               <Coffee className="h-2 w-2" />
             </div>
             <span>Lunch Break</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-gray-100 border border-gray-300 rounded"></div>
+            <div className="w-4 h-4 bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded"></div>
             <span>Indirect Time</span>
           </div>
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 bg-purple-100 border border-purple-300 rounded"></div>
+            <div className="w-4 h-4 bg-purple-100 dark:bg-purple-900/40 border border-purple-300 dark:border-purple-700 rounded"></div>
             <span>Supervision</span>
           </div>
         </div>

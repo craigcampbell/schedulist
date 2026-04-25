@@ -86,7 +86,22 @@ export default function AppointmentForm({
                 <PatientColorSelect
                   patients={patients}
                   value={formState.patientId}
-                  onChange={(e) => setFormState({...formState, patientId: e.target.value})}
+                  onChange={(patientId) => {
+                    const selectedPatient = patients?.find(p => p.id === patientId);
+                    const updates = { patientId };
+                    
+                    // Auto-select location matching patient's service type
+                    if (selectedPatient?.serviceLocationType && locations?.length > 0) {
+                      const typeMap = { home: 'home', school: 'school', clinic: 'clinic' };
+                      const targetType = typeMap[selectedPatient.serviceLocationType] || 'clinic';
+                      const matchingLocation = locations.find(l => l.locationType === targetType);
+                      if (matchingLocation) {
+                        updates.locationId = matchingLocation.id;
+                      }
+                    }
+                    
+                    setFormState({...formState, ...updates});
+                  }}
                   required={true}
                 />
               </div>
@@ -143,16 +158,15 @@ export default function AppointmentForm({
               </select>
             </div>
             
-            {/* Location Selection - Required for proper travel time and scheduling */}
+            {/* Location Selection */}
             <div>
-              <label className="block text-sm font-medium mb-1">Location *</label>
+              <label className="block text-sm font-medium mb-1">Location</label>
               <select 
                 className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
                 value={formState.locationId || ''}
                 onChange={(e) => setFormState({...formState, locationId: e.target.value})}
-                required
               >
-                <option value="">Select a location</option>
+                <option value="">Auto-assign</option>
                 {locations?.map(location => {
                   const typeLabel = location.locationType === 'home' ? '(Home/Remote)' :
                                     location.locationType === 'school' ? '(School)' : '';

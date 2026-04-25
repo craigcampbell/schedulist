@@ -32,7 +32,7 @@ export default function DailyScheduleView({
                 {/* Time column */}
                 <div className="border-r border-gray-200 dark:border-gray-700">
                   {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
-                    <div key={i} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
+                    <div key={time.toISOString()} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
                       {format(time, 'h a')}
                     </div>
                   ))}
@@ -41,7 +41,7 @@ export default function DailyScheduleView({
                 {/* Appointments column */}
                 <div className="relative">
                   {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
-                    <div key={i} className="h-24 border-b border-gray-200 dark:border-gray-700">
+                    <div key={time.toISOString()} className="h-24 border-b border-gray-200 dark:border-gray-700">
                       {/* 15-minute lines */}
                       <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 24}px` }}></div>
                       <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 48}px` }}></div>
@@ -127,7 +127,7 @@ export default function DailyScheduleView({
                 {/* Time column */}
                 <div className="border-r border-gray-200 dark:border-gray-700">
                   {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
-                    <div key={i} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
+                    <div key={time.toISOString()} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
                       {format(time, 'h a')}
                     </div>
                   ))}
@@ -136,7 +136,7 @@ export default function DailyScheduleView({
                 {/* Appointments column */}
                 <div className="relative">
                   {timeSlots.filter(slot => slot.getMinutes() === 0).map((time, i) => (
-                    <div key={i} className="h-24 border-b border-gray-200 dark:border-gray-700">
+                    <div key={time.toISOString()} className="h-24 border-b border-gray-200 dark:border-gray-700">
                       {/* 15-minute lines */}
                       <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 24}px` }}></div>
                       <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 48}px` }}></div>

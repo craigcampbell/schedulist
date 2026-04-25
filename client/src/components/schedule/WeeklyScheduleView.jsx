@@ -1,6 +1,6 @@
 import React from 'react';
 import { format, parseISO } from 'date-fns';
-import { User, Calendar } from 'lucide-react';
+import { MapPin, Calendar } from 'lucide-react';
 import { formatTime } from '../../utils/date-utils';
 
 export default function WeeklyScheduleView({
@@ -42,7 +42,7 @@ export default function WeeklyScheduleView({
                     </div>
                     
                     <div className="mt-2 flex items-center text-sm text-gray-600 dark:text-gray-400">
-                      <User className="h-4 w-4 mr-1" />
+                      <MapPin className="h-4 w-4 mr-1" />
                       <span>{appointment?.location?.name || 'No location'}</span>
                     </div>
                   </div>

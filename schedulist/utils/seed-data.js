@@ -93,28 +93,36 @@ const TEST_USERS = {
     lastName: 'Admin',
     email: 'admin@sunshine.com',
     password: 'Password123',
-    organization: 'active'
+    organization: 'active',
+    slackUserId: 'U01A2B3C4D5',
+    videoLink: 'https://meet.google.com/abc-defg-hij'
   },
   sunshineBCBA: {
     firstName: 'Brian',
     lastName: 'BCBA',
     email: 'bcba@sunshine.com',
     password: 'Password123',
-    organization: 'active'
+    organization: 'active',
+    slackUserId: 'U01B2C3D4E5',
+    videoLink: 'https://meet.google.com/bcd-efgh-ijk'
   },
   sunshineBCBA2: {
     firstName: 'Barbara',
     lastName: 'BCBA',
     email: 'bcba2@sunshine.com',
     password: 'Password123',
-    organization: 'active'
+    organization: 'active',
+    slackUserId: 'U01C3D4E5F6',
+    videoLink: null
   },
   sunshineTherapist: {
     firstName: 'Tina',
     lastName: 'Therapist',
     email: 'therapist@sunshine.com',
     password: 'Password123',
-    organization: 'active'
+    organization: 'active',
+    slackUserId: 'U01D4E5F6G7',
+    videoLink: null
   },
   
   // Organization 2 - Expiring subscription
@@ -123,21 +131,27 @@ const TEST_USERS = {
     lastName: 'Admin',
     email: 'admin@hearts.com',
     password: 'Password123',
-    organization: 'expiring'
+    organization: 'expiring',
+    slackUserId: 'U02E5F6G7H8',
+    videoLink: 'https://zoom.us/j/1234567890'
   },
   heartsBCBA: {
     firstName: 'Bella',
     lastName: 'BCBA',
     email: 'bcba@hearts.com',
     password: 'Password123',
-    organization: 'expiring'
+    organization: 'expiring',
+    slackUserId: 'U02F6G7H8I9',
+    videoLink: null
   },
   heartsTherapist: {
     firstName: 'Theo',
     lastName: 'Therapist',
     email: 'therapist@hearts.com',
     password: 'Password123',
-    organization: 'expiring'
+    organization: 'expiring',
+    slackUserId: 'U02G7H8I9J0',
+    videoLink: null
   },
   
   // Organization 3 - Inactive subscription
@@ -146,21 +160,27 @@ const TEST_USERS = {
     lastName: 'Admin',
     email: 'admin@coastal.com',
     password: 'Password123',
-    organization: 'inactive'
+    organization: 'inactive',
+    slackUserId: 'U03H8I9J0K1',
+    videoLink: 'https://meet.google.com/cde-fghi-jkl'
   },
   coastalBCBA: {
     firstName: 'Beth',
     lastName: 'BCBA',
     email: 'bcba@coastal.com',
     password: 'Password123',
-    organization: 'inactive'
+    organization: 'inactive',
+    slackUserId: 'U03I9J0K1L2',
+    videoLink: null
   },
   coastalTherapist: {
     firstName: 'Trevor',
     lastName: 'Therapist',
     email: 'therapist@coastal.com',
     password: 'Password123',
-    organization: 'inactive'
+    organization: 'inactive',
+    slackUserId: 'U03J0K1L2M3',
+    videoLink: null
   }
 };
 
@@ -704,7 +724,9 @@ async function createUserWithOrg(userData, orgId, role) {
     password: userData ? userData.password : 'Password123', // Pass the plain text password
     phone: faker.phone.number(),
     organizationId: orgId,
-    active: true
+    active: true,
+    slackUserId: userData?.slackUserId || null,
+    videoLink: userData?.videoLink || null
   });
 
   // Assign role
@@ -782,7 +804,8 @@ async function createPatient(orgId = null, colorIndex = 0) {
     approvedHoursEndDate: approvedEndDate,
     usedHours,
     status: faker.helpers.arrayElement(['active', 'active', 'active', 'active', 'inactive']), // 80% active
-    organizationId: orgId
+    organizationId: orgId,
+    serviceLocationType: faker.helpers.arrayElement(['clinic', 'clinic', 'clinic', 'home', 'home', 'school']) // 50% clinic, 33% home, 17% school
   });
 }
 

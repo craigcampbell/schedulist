@@ -566,28 +566,29 @@ export default function TeamScheduleView({
                 <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
                   <div className="min-w-[800px]">
                     {/* Header rows with day, date, and therapist names */}
-                    <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700">
-                      <div className="p-2 font-medium border-r border-b dark:border-gray-700 text-center">
+                    <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 text-gray-700 dark:text-gray-300">
+                      <div className="p-2 font-medium border-r border-b dark:border-gray-700 text-center text-gray-700 dark:text-gray-300">
                         {formatDayOfWeek(selectedDate)}
                       </div>
 
                       {/* BCBA header row */}
                       <div
-                        className={`col-span-${team.Members?.length || 1} p-2 font-medium border-r border-b dark:border-gray-700 text-right pr-5`}
+                        className="p-2 font-medium border-r border-b dark:border-gray-700 text-right pr-5 text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800"
+                        style={{ gridColumn: `span ${team.Members?.length || 1}` }}
                       >
                         {team.LeadBCBA?.firstName || ""} (BCBA)
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700">
-                      <div className="p-2 font-medium border-r dark:border-gray-700 text-center">
+                    <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 text-gray-700 dark:text-gray-300">
+                      <div className="p-2 font-medium border-r dark:border-gray-700 text-center text-gray-700 dark:text-gray-300">
                         {formatDayOfMonth(selectedDate)}
                       </div>
 
                       {team.Members?.map((member) => (
                         <div
                           key={member.id}
-                          className="p-2 font-medium border-r dark:border-gray-700 text-center"
+                          className="p-2 font-medium border-r dark:border-gray-700 text-center text-gray-700 dark:text-gray-300"
                         >
                           {member.firstName}
                         </div>
@@ -595,13 +596,13 @@ export default function TeamScheduleView({
                     </div>
 
                     {/* Time slots */}
-                    {TIME_SLOTS.map((timeSlot, i) => (
+                    {TIME_SLOTS.map((timeSlot, slotIdx) => (
                       <div
-                        key={i}
+                        key={timeSlot}
                         className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b dark:border-gray-700"
                       >
                         {/* Time column */}
-                        <div className="h-[40px] flex items-center justify-center text-sm border-r dark:border-gray-700 font-medium">
+                        <div className="h-[40px] flex items-center justify-center text-sm border-r dark:border-gray-700 font-medium text-gray-600 dark:text-gray-400">
                           {timeSlot}
                         </div>
 
@@ -610,8 +611,8 @@ export default function TeamScheduleView({
                           const therapistGroups = getTherapistAppointments(
                             member.id,
                           );
-                          const groupInfo = getGroupForSlot(therapistGroups, i);
-                          const dropId = `drop-${team.id}-${member.id}-${i}`;
+                          const groupInfo = getGroupForSlot(therapistGroups, slotIdx);
+                          const dropId = `drop-${team.id}-${member.id}-${slotIdx}`;
 
                           return (
                             <Droppable

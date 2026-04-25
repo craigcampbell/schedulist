@@ -112,6 +112,12 @@ module.exports = (sequelize, DataTypes) => {
       },
       comment: 'Default location for therapy sessions'
     },
+    serviceLocationType: {
+      type: DataTypes.ENUM('clinic', 'home', 'school'),
+      defaultValue: 'clinic',
+      allowNull: false,
+      comment: 'Where the patient receives services - affects default appointment location'
+    },
     schedulingNotes: {
       type: DataTypes.TEXT,
       allowNull: true,

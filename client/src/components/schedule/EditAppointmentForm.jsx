@@ -138,7 +138,7 @@ export default function EditAppointmentForm({
                   value={editFormState.locationId || ''}
                   onChange={(e) => setEditFormState({...editFormState, locationId: e.target.value})}
                 >
-                  <option value="">Select a location</option>
+                  <option value="">Auto-assign</option>
                   {locations?.map(location => (
                     <option key={location.id} value={location.id}>
                       {location.name}

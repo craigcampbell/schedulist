@@ -26,6 +26,7 @@ const PatientForm = ({ patient = null, onClose, onSuccess }) => {
     requiredWeeklyHours: patient?.requiredWeeklyHours || '',
     color: patient?.color || '#6B7280',
     teamId: patient?.teamId || '',
+    serviceLocationType: patient?.serviceLocationType || 'clinic',
   });
 
   const [errors, setErrors] = useState({});
@@ -350,6 +351,38 @@ const PatientForm = ({ patient = null, onClose, onSuccess }) => {
                   />
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Service Location Type */}
+          <div>
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Service Location</h3>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Where does this patient receive services?
+              </label>
+              <div className="space-y-2">
+                {[
+                  { value: 'clinic', label: 'Clinic', desc: 'Patient comes to the clinic' },
+                  { value: 'home', label: 'Home', desc: 'Therapist travels to patient\'s home' },
+                  { value: 'school', label: 'School', desc: 'Therapist travels to patient\'s school' },
+                ].map(opt => (
+                  <label key={opt.value} className={`flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 ${formData.serviceLocationType === opt.value ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700'}`}>
+                    <input
+                      type="radio"
+                      name="serviceLocationType"
+                      value={opt.value}
+                      checked={formData.serviceLocationType === opt.value}
+                      onChange={(e) => setFormData({...formData, serviceLocationType: e.target.value})}
+                      className="mt-0.5"
+                    />
+                    <div>
+                      <span className="font-medium text-sm">{opt.label}</span>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">{opt.desc}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
             </div>
           </div>
 

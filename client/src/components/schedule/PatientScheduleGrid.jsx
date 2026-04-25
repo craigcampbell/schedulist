@@ -260,28 +260,49 @@ export default function PatientScheduleGrid({
     return scheduleData;
   }, [todaysAppointments, patients]);
 
-  // Check if appointment is in time slot
-  const isAppointmentInTimeSlot = (appointment, timeSlot) => {
-    const [slotStart, slotEnd] = timeSlot.split('-');
-    const slotStartTime = parseTimeToMinutes(slotStart);
-    const slotEndTime = parseTimeToMinutes(slotEnd);
-    
-    const appStart = new Date(appointment.startTime);
-    const appEnd = new Date(appointment.endTime);
-    
-    const appStartMinutes = appStart.getHours() * 60 + appStart.getMinutes();
-    const appEndMinutes = appEnd.getHours() * 60 + appEnd.getMinutes();
-    
-    return (
-      (appStartMinutes >= slotStartTime && appStartMinutes < slotEndTime) ||
-      (appEndMinutes > slotStartTime && appEndMinutes <= slotEndTime) ||
-      (appStartMinutes <= slotStartTime && appEndMinutes >= slotEndTime)
-    );
+  const parseTimeToMinutes = (timeStr) => {
+    if (!timeStr) return 0;
+    // Handle "7:30 AM" format (excel)
+    const ampmMatch = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+    if (ampmMatch) {
+      let hours = parseInt(ampmMatch[1], 10);
+      const minutes = parseInt(ampmMatch[2], 10);
+      const period = (ampmMatch[3] || '').toUpperCase();
+      if (period === 'PM' && hours !== 12) hours += 12;
+      if (period === 'AM' && hours === 12) hours = 0;
+      return hours * 60 + minutes;
+    }
+    // Handle "07:30" format (24h)
+    const [hours, minutes] = timeStr.split(':').map(Number);
+    return (hours || 0) * 60 + (minutes || 0);
   };
 
-  const parseTimeToMinutes = (timeStr) => {
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    return hours * 60 + minutes;
+  // Check if appointment is in time slot
+  const isAppointmentInTimeSlot = (appointment, timeSlot) => {
+    let slotStartMinutes, slotEndMinutes;
+
+    if (timeSlot.includes('-')) {
+      // Range format: "7:30-8:00" or "7:30-8:00 AM"
+      const parts = timeSlot.split('-');
+      slotStartMinutes = parseTimeToMinutes(parts[0]);
+      slotEndMinutes = parseTimeToMinutes(parts[parts.length - 1]);
+    } else {
+      // Excel format: "7:30 AM" — slot spans 30 minutes from this time
+      slotStartMinutes = parseTimeToMinutes(timeSlot);
+      slotEndMinutes = slotStartMinutes + 30;
+    }
+
+    const appStart = new Date(appointment.startTime);
+    const appEnd = new Date(appointment.endTime);
+
+    const appStartMinutes = appStart.getHours() * 60 + appStart.getMinutes();
+    const appEndMinutes = appEnd.getHours() * 60 + appEnd.getMinutes();
+
+    return (
+      (appStartMinutes >= slotStartMinutes && appStartMinutes < slotEndMinutes) ||
+      (appEndMinutes > slotStartMinutes && appEndMinutes <= slotEndMinutes) ||
+      (appStartMinutes <= slotStartMinutes && appEndMinutes >= slotEndMinutes)
+    );
   };
 
   // Get appointment for specific patient and time slot

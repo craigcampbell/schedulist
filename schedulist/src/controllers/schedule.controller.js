@@ -445,10 +445,41 @@ const createAppointment = async (req, res) => {
       return res.status(404).json({ message: 'BCBA not found' });
     }
     
-    // Validate location exists
-    const location = await Location.findByPk(locationId);
+    // Resolve location - auto-assign based on patient's service location type
+    let location;
+    if (locationId) {
+      location = await Location.findByPk(locationId);
+    } else {
+      // Auto-pick based on patient's service location type
+      const patientServiceType = patient?.serviceLocationType || 'clinic';
+      const locationTypeMap = { home: 'home', school: 'school', clinic: 'clinic' };
+      const targetLocationType = locationTypeMap[patientServiceType] || 'clinic';
+      
+      // Try matching location type first
+      location = await Location.findOne({
+        where: { organizationId: req.user.organizationId, active: true, locationType: targetLocationType },
+        order: [['createdAt', 'ASC']]
+      });
+      
+      // Fall back to therapist's default
+      if (!location && therapist?.defaultLocationId) {
+        location = await Location.findByPk(therapist.defaultLocationId);
+      }
+      
+      // Final fallback: any org location
+      if (!location) {
+        location = await Location.findOne({
+          where: { organizationId: req.user.organizationId, active: true },
+          order: [['createdAt', 'ASC']]
+        });
+      }
+      
+      if (location) {
+        locationId = location.id;
+      }
+    }
     if (!location) {
-      return res.status(404).json({ message: 'Location not found' });
+      return res.status(400).json({ message: 'No locations available. Please create a location first.' });
     }
     
     // Calculate time slot based on user input or find next available
@@ -729,6 +760,35 @@ const deleteAppointment = async (req, res) => {
       return res.status(404).json({ message: 'Appointment not found' });
     }
     
+    // Save snapshot before deleting (for audit restore)
+    const snapshot = {
+      startTime: appointment.startTime,
+      endTime: appointment.endTime,
+      title: appointment.title,
+      status: appointment.status,
+      serviceType: appointment.serviceType,
+      notes: appointment.notes,
+      therapistId: appointment.therapistId,
+      bcbaId: appointment.bcbaId,
+      patientId: appointment.patientId,
+      locationId: appointment.locationId,
+      teamId: appointment.teamId,
+      recurring: appointment.recurring,
+      recurringPattern: appointment.recurringPattern
+    };
+    
+    const { Audit } = require('../models');
+    await Audit.log({
+      entityType: 'Appointment',
+      entityId: appointment.id,
+      action: 'delete',
+      fieldName: 'all',
+      userId: req.user.id,
+      organizationId: req.user.organizationId || req.user.organizationId,
+      req,
+      metadata: { snapshot }
+    });
+    
     await appointment.destroy();
     
     return res.status(200).json({
@@ -737,6 +797,73 @@ const deleteAppointment = async (req, res) => {
     
   } catch (error) {
     return res.status(500).json({ message: 'Error deleting appointment', error: error.message });
+  }
+};
+
+/**
+ * Restore a deleted appointment from audit log
+ */
+const restoreAppointment = async (req, res) => {
+  try {
+    const { auditId } = req.params;
+    const { Audit } = require('../models');
+    
+    const auditEntry = await Audit.findByPk(auditId);
+    
+    if (!auditEntry || auditEntry.entityType !== 'Appointment' || auditEntry.action !== 'delete') {
+      return res.status(404).json({ message: 'Restorable audit entry not found' });
+    }
+    
+    let snapshot;
+    try {
+      snapshot = auditEntry.metadata?.snapshot || JSON.parse(auditEntry.metadata?.snapshot || '{}');
+    } catch {
+      return res.status(400).json({ message: 'No snapshot data available for restore' });
+    }
+    
+    if (!snapshot.startTime) {
+      return res.status(400).json({ message: 'Incomplete snapshot data' });
+    }
+    
+    const appointment = await Appointment.create({
+      startTime: snapshot.startTime,
+      endTime: snapshot.endTime,
+      title: snapshot.title,
+      status: snapshot.status || 'scheduled',
+      serviceType: snapshot.serviceType,
+      notes: snapshot.notes,
+      therapistId: snapshot.therapistId,
+      bcbaId: snapshot.bcbaId || req.user.id,
+      patientId: snapshot.patientId,
+      locationId: snapshot.locationId,
+      teamId: snapshot.teamId,
+      recurring: snapshot.recurring || false,
+      recurringPattern: snapshot.recurringPattern
+    });
+    
+    await Audit.log({
+      entityType: 'Appointment',
+      entityId: appointment.id,
+      action: 'create',
+      fieldName: 'all',
+      userId: req.user.id,
+      organizationId: req.user.organizationId,
+      req,
+      metadata: { restoredFrom: auditId, restoredBy: req.user.id }
+    });
+    
+    return res.status(201).json({
+      message: 'Appointment restored successfully',
+      appointment: {
+        id: appointment.id,
+        startTime: appointment.startTime,
+        endTime: appointment.endTime,
+        serviceType: appointment.serviceType
+      }
+    });
+    
+  } catch (error) {
+    return res.status(500).json({ message: 'Error restoring appointment', error: error.message });
   }
 };
 
@@ -1011,6 +1138,7 @@ module.exports = {
   updateAppointment,
   updateAppointmentTherapist,
   deleteAppointment,
+  restoreAppointment,
   getNextAvailableSlot,
   findNextAvailableSlot,
   getTeamSchedule
