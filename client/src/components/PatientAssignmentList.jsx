@@ -1,15 +1,27 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { 
-  getPatientsWithAssignments, 
-  getAvailableBCBAs, 
-  getAvailableTherapists, 
-  setPrimaryBCBA, 
-  updateBCBAAssignment, 
-  updateTherapistAssignment 
+import {
+  getPatientsWithAssignments,
+  getAvailableBCBAs,
+  getAvailableTherapists,
+  setPrimaryBCBA,
+  updateBCBAAssignment,
+  updateTherapistAssignment
 } from '../api/bcba';
-import { Check, Edit, Plus, Trash, Star, StarOff, X } from 'lucide-react';
+import { Check, Edit, Plus, Trash, Star, StarOff, X, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { Button } from './ui/button';
+
+// Returns true if provider's insurancePanels fuzzy-match the patient's insuranceProvider string
+function insuranceMatches(providerPanels = [], patientInsurance = '') {
+  if (!patientInsurance) return null; // unknown — no indicator shown
+  const needle = patientInsurance.toLowerCase();
+  return providerPanels.some(p => {
+    const hay = p.toLowerCase();
+    // Check mutual containment of significant tokens
+    const tokens = needle.split(/[\s/,&]+/).filter(t => t.length > 3);
+    return tokens.some(t => hay.includes(t)) || hay.includes(needle) || needle.includes(hay);
+  });
+}
 
 const PatientAssignmentList = () => {
   const [assignmentFilter, setAssignmentFilter] = useState('all'); // all, assigned, unassigned
@@ -177,7 +189,10 @@ const PatientAssignmentList = () => {
               <tr key={patient.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="font-medium">{patient.firstName} {patient.lastName}</div>
-                  <div className="text-sm text-gray-500 dark:text-gray-400">{patient.status}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">{patient.status}</div>
+                  {patient.insuranceProvider && (
+                    <div className="text-xs text-teal-600 dark:text-teal-400 mt-0.5">{patient.insuranceProvider}</div>
+                  )}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   {patient.primaryBCBA ? (
@@ -245,42 +260,50 @@ const PatientAssignmentList = () => {
                     
                     {/* BCBA Assignment Form */}
                     {editingPatient === patient.id && assignmentType === 'bcba' && (
-                      <div className="mt-2 p-2 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800 w-full">
+                      <div className="mt-2 p-3 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800 w-full space-y-2">
+                        {patient.insuranceProvider && (
+                          <p className="text-xs text-gray-500">
+                            Patient insurance: <span className="font-medium text-gray-700 dark:text-gray-300">{patient.insuranceProvider}</span>
+                            {' — '}providers with a ✓ are credentialed with this plan
+                          </p>
+                        )}
                         <div className="flex gap-2">
-                          <select 
-                            value={selectedAssigneeId} 
+                          <select
+                            value={selectedAssigneeId}
                             onChange={(e) => setSelectedAssigneeId(e.target.value)}
-                            className="flex-1 p-2 rounded dark:bg-gray-700"
+                            className="flex-1 p-2 rounded dark:bg-gray-700 text-sm"
                             disabled={isLoadingBCBAs}
                           >
                             <option value="">Select a BCBA</option>
-                            {availableBCBAs.map(bcba => {
-                              // Skip if already assigned
-                              const isAssigned = patient.bcbas?.some(assigned => assigned.id === bcba.id);
-                              if (isAssigned) return null;
-                              
-                              return (
-                                <option key={bcba.id} value={bcba.id}>
-                                  {bcba.firstName} {bcba.lastName}
-                                </option>
-                              );
-                            })}
+                            {availableBCBAs
+                              .filter(bcba => !patient.bcbas?.some(a => a.id === bcba.id))
+                              .sort((a, b) => {
+                                const am = insuranceMatches(a.insurancePanels, patient.insuranceProvider);
+                                const bm = insuranceMatches(b.insurancePanels, patient.insuranceProvider);
+                                if (am && !bm) return -1;
+                                if (!am && bm) return 1;
+                                return `${a.lastName}${a.firstName}`.localeCompare(`${b.lastName}${b.firstName}`);
+                              })
+                              .map(bcba => {
+                                const match = insuranceMatches(bcba.insurancePanels, patient.insuranceProvider);
+                                const suffix = match === true ? ' ✓' : match === false ? ' ⚠' : '';
+                                return (
+                                  <option key={bcba.id} value={bcba.id}>
+                                    {bcba.firstName} {bcba.lastName}{bcba.credentials ? `, ${bcba.credentials}` : ''}{suffix}
+                                  </option>
+                                );
+                              })
+                            }
                           </select>
-                          <Button 
-                            variant="default" 
+                          <Button
+                            variant="default"
                             size="sm"
                             onClick={handleAddAssignment}
-                            disabled={!selectedAssigneeId || updateBCBAAssignmentMutation.isLoading}
+                            disabled={!selectedAssigneeId || updateBCBAAssignmentMutation.isPending}
                           >
                             Add
                           </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={cancelEditing}
-                          >
-                            Cancel
-                          </Button>
+                          <Button variant="ghost" size="sm" onClick={cancelEditing}>Cancel</Button>
                         </div>
                       </div>
                     )}
@@ -329,42 +352,50 @@ const PatientAssignmentList = () => {
                     
                     {/* Therapist Assignment Form */}
                     {editingPatient === patient.id && assignmentType === 'therapist' && (
-                      <div className="mt-2 p-2 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800 w-full">
+                      <div className="mt-2 p-3 border border-gray-200 dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800 w-full space-y-2">
+                        {patient.insuranceProvider && (
+                          <p className="text-xs text-gray-500">
+                            Patient insurance: <span className="font-medium text-gray-700 dark:text-gray-300">{patient.insuranceProvider}</span>
+                            {' — '}providers with a ✓ are credentialed with this plan
+                          </p>
+                        )}
                         <div className="flex gap-2">
-                          <select 
-                            value={selectedAssigneeId} 
+                          <select
+                            value={selectedAssigneeId}
                             onChange={(e) => setSelectedAssigneeId(e.target.value)}
-                            className="flex-1 p-2 rounded dark:bg-gray-700"
+                            className="flex-1 p-2 rounded dark:bg-gray-700 text-sm"
                             disabled={isLoadingTherapists}
                           >
                             <option value="">Select a Therapist</option>
-                            {availableTherapists.map(therapist => {
-                              // Skip if already assigned
-                              const isAssigned = patient.therapists?.some(assigned => assigned.id === therapist.id);
-                              if (isAssigned) return null;
-                              
-                              return (
-                                <option key={therapist.id} value={therapist.id}>
-                                  {therapist.firstName} {therapist.lastName}
-                                </option>
-                              );
-                            })}
+                            {availableTherapists
+                              .filter(t => !patient.therapists?.some(a => a.id === t.id))
+                              .sort((a, b) => {
+                                const am = insuranceMatches(a.insurancePanels, patient.insuranceProvider);
+                                const bm = insuranceMatches(b.insurancePanels, patient.insuranceProvider);
+                                if (am && !bm) return -1;
+                                if (!am && bm) return 1;
+                                return `${a.lastName}${a.firstName}`.localeCompare(`${b.lastName}${b.firstName}`);
+                              })
+                              .map(therapist => {
+                                const match = insuranceMatches(therapist.insurancePanels, patient.insuranceProvider);
+                                const suffix = match === true ? ' ✓' : match === false ? ' ⚠' : '';
+                                return (
+                                  <option key={therapist.id} value={therapist.id}>
+                                    {therapist.firstName} {therapist.lastName}{therapist.credentials ? `, ${therapist.credentials}` : ''}{suffix}
+                                  </option>
+                                );
+                              })
+                            }
                           </select>
-                          <Button 
-                            variant="default" 
+                          <Button
+                            variant="default"
                             size="sm"
                             onClick={handleAddAssignment}
-                            disabled={!selectedAssigneeId || updateTherapistAssignmentMutation.isLoading}
+                            disabled={!selectedAssigneeId || updateTherapistAssignmentMutation.isPending}
                           >
                             Add
                           </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={cancelEditing}
-                          >
-                            Cancel
-                          </Button>
+                          <Button variant="ghost" size="sm" onClick={cancelEditing}>Cancel</Button>
                         </div>
                       </div>
                     )}

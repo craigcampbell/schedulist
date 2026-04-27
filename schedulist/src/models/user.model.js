@@ -83,6 +83,33 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true,
     },
+    // Billing / credentialing fields (added via migration 20250721000000)
+    npi: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+      comment: 'National Provider Identifier (10-digit)',
+    },
+    credentials: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+      comment: 'e.g. "BCBA, LBA" or "RBT"',
+    },
+    providerLevel: {
+      type: DataTypes.ENUM('paraprofessional', 'bachelor', 'master', 'doctorate'),
+      allowNull: true,
+      comment: 'Determines billing modifier: HM/HN/HO',
+    },
+    // Insurance & credentialing (added via migration 20250722000000)
+    insurancePanels: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      comment: 'Insurance companies this provider is credentialed/paneled with',
+    },
+    certifications: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      comment: 'Professional certifications held by this provider',
+    },
   }, {
     timestamps: true,
     hooks: {

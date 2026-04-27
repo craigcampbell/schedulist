@@ -181,7 +181,48 @@ module.exports = (sequelize, DataTypes) => {
         is: /^#[0-9A-Fa-f]{6}$/
       }
     },
-    
+
+    // Insurance / billing fields (added via migration 20250721000000)
+    encryptedMemberId: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    encryptedGroupNumber: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    primaryDiagnosisCode: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+      defaultValue: 'F84.0',
+    },
+    secondaryDiagnosisCodes: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+    authorizationNumber: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+    authorizationStartDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
+    authorizationEndDate: {
+      type: DataTypes.DATEONLY,
+      allowNull: true,
+    },
+    authorizedUnits: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      comment: 'Total authorized 15-min units for the auth period',
+    },
+    insuranceNotes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      comment: 'Admin notes about insurance, billing rules, special requirements',
+    },
+
     // Virtual fields that get decrypted
     firstName: {
       type: DataTypes.VIRTUAL,
@@ -244,6 +285,24 @@ module.exports = (sequelize, DataTypes) => {
       },
       set(value) {
         this.setDataValue('encryptedAddress', this.encryptField(value));
+      }
+    },
+    memberId: {
+      type: DataTypes.VIRTUAL,
+      get() {
+        return this.decryptField('encryptedMemberId');
+      },
+      set(value) {
+        this.setDataValue('encryptedMemberId', this.encryptField(value));
+      }
+    },
+    groupNumber: {
+      type: DataTypes.VIRTUAL,
+      get() {
+        return this.decryptField('encryptedGroupNumber');
+      },
+      set(value) {
+        this.setDataValue('encryptedGroupNumber', this.encryptField(value));
       }
     },
   }, {
@@ -327,7 +386,9 @@ module.exports = (sequelize, DataTypes) => {
       'encryptedInsuranceProvider': '[Encrypted Insurance]',
       'encryptedInsuranceId': '[Encrypted Insurance ID]',
       'encryptedPhone': '[Encrypted Phone]',
-      'encryptedAddress': '[Encrypted Address]'
+      'encryptedAddress': '[Encrypted Address]',
+      'encryptedMemberId': '[Encrypted Member ID]',
+      'encryptedGroupNumber': '[Encrypted Group Number]',
     };
     
     return placeholders[field] || '[Encrypted Data]';

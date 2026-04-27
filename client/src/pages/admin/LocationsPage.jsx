@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Edit, Trash, Check, X, MapPin, Clock } from 'lucide-react';
 import { Button } from '../../components/ui/button';
-import { getLocations, createLocation, updateLocation, deleteLocation } from '../../api/admin';
+import { createLocation, updateLocation, deleteLocation } from '../../api/admin';
+import apiClient from '../../api/client';
 import { useModal } from '../../context/modal-context';
 
 const AdminLocationsPage = () => {
@@ -26,21 +27,17 @@ const AdminLocationsPage = () => {
   
   const queryClient = useQueryClient();
   
-  // Fetch locations
+  // Fetch locations directly via admin route to include inactive locations
   const { data: locations, isLoading, error } = useQuery({
-    queryKey: ['locations'],
-    queryFn: () => getLocations(false) // Get all locations including inactive
+    queryKey: ['admin-locations'],
+    queryFn: () => apiClient.get('/admin/locations').then(r => r.data)
   });
-  
-  // Debug logging
-  console.log('Locations query result:', { locations, isLoading, error });
-  console.log('Locations type:', typeof locations, 'Is Array:', Array.isArray(locations));
   
   // Create location mutation
   const createLocationMutation = useMutation({
     mutationFn: createLocation,
     onSuccess: () => {
-      queryClient.invalidateQueries(['locations']);
+      queryClient.invalidateQueries(['admin-locations']);
       resetForm();
     },
     onError: (error) => {
@@ -52,7 +49,7 @@ const AdminLocationsPage = () => {
   const updateLocationMutation = useMutation({
     mutationFn: ({ id, data }) => updateLocation(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['locations']);
+      queryClient.invalidateQueries(['admin-locations']);
       resetForm();
     },
     onError: (error) => {
@@ -64,7 +61,7 @@ const AdminLocationsPage = () => {
   const deleteLocationMutation = useMutation({
     mutationFn: (id) => deleteLocation(id),
     onSuccess: () => {
-      queryClient.invalidateQueries(['locations']);
+      queryClient.invalidateQueries(['admin-locations']);
     },
     onError: async (error) => {
       console.error('Failed to delete location', error);
@@ -76,7 +73,7 @@ const AdminLocationsPage = () => {
   const toggleActiveMutation = useMutation({
     mutationFn: ({ id, data }) => updateLocation(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['locations']);
+      queryClient.invalidateQueries(['admin-locations']);
     },
     onError: async (error) => {
       console.error('Failed to toggle active status', error);

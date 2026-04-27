@@ -13,6 +13,7 @@ import ResetPasswordPage from './pages/auth/ResetPasswordPage';
 import OrganizationSignupPage from './pages/auth/OrganizationSignupPage';
 
 // Therapist Pages
+import TherapistDashboardPage from './pages/therapist/DashboardPage';
 import TherapistSchedulePage from './pages/therapist/SchedulePage';
 import TherapistPatientsPage from './pages/therapist/PatientsPage';
 import TherapistPatientDetailsPage from './pages/therapist/PatientDetailsPage';
@@ -33,6 +34,7 @@ import AdminLocationsPage from './pages/admin/LocationsPage';
 import AdminTeamsPage from './pages/admin/TeamsPage';
 import AdminAuditLogsPage from './pages/admin/AuditLogsPage';
 import SubscriptionPage from './pages/admin/SubscriptionPage';
+import BillingReportPage from './pages/admin/BillingReportPage';
 
 // Common Pages
 import ProfilePage from './pages/common/ProfilePage';
@@ -67,7 +69,7 @@ const ProtectedRoute = ({ children, requiredRoles = [], requireSubscription = tr
       if (user.roles.includes('bcba')) {
         return <Navigate to="/bcba/dashboard" replace />;
       } else {
-        return <Navigate to="/therapist/schedule" replace />;
+        return <Navigate to="/therapist/dashboard" replace />;
       }
     }
   }
@@ -91,7 +93,7 @@ function AppRoutes() {
                 ? <Navigate to="/admin/dashboard" /> 
                 : user?.roles.includes('bcba') 
                     ? <Navigate to="/bcba/dashboard" /> 
-                    : <Navigate to="/therapist/schedule" />)
+                    : <Navigate to="/therapist/dashboard" />)
             : <SignupDefault />
         } 
       />
@@ -110,6 +112,11 @@ function AppRoutes() {
           <DashboardLayout />
         </ProtectedRoute>
       }>
+        <Route path="/therapist/dashboard" element={
+          <ProtectedRoute requiredRoles={['therapist']}>
+            <TherapistDashboardPage />
+          </ProtectedRoute>
+        } />
         <Route path="/therapist/schedule" element={
           <ProtectedRoute requiredRoles={['therapist', 'bcba']}>
             <TherapistSchedulePage />
@@ -202,7 +209,12 @@ function AppRoutes() {
             <BCBASchedulePage />
           </ProtectedRoute>
         } />
-        
+        <Route path="/admin/billing" element={
+          <ProtectedRoute requiredRoles={['admin']} requireSubscription={false}>
+            <BillingReportPage />
+          </ProtectedRoute>
+        } />
+
         <Route path="/profile" element={
           <ProtectedRoute requireSubscription={false}>
             <ProfilePage />

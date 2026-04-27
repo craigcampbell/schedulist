@@ -2,18 +2,19 @@ import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/auth-context';
 import { useTheme } from '../context/theme-provider';
-import { 
-  Sun, 
-  Moon, 
-  Menu, 
-  X, 
-  Home, 
-  Calendar, 
-  Users, 
-  UserCircle, 
-  LogOut, 
+import {
+  Sun,
+  Moon,
+  Menu,
+  X,
+  Home,
+  Calendar,
+  Users,
+  UserCircle,
+  LogOut,
   Settings,
-  MapPin
+  MapPin,
+  FileText,
 } from 'lucide-react';
 import { Button } from '../components/ui/button';
 
@@ -168,11 +169,25 @@ export default function DashboardLayout() {
                 <Calendar className="mr-3 h-5 w-5" />
                 Schedule
               </NavLink>
-              <NavLink 
-                to="/admin/subscription" 
-                className={({ isActive }) => 
+              <NavLink
+                to="/admin/billing"
+                className={({ isActive }) =>
                   `flex items-center px-2 py-2 text-sm font-medium rounded-md ${
-                    isActive 
+                    isActive
+                      ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-white'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'
+                  }`
+                }
+                onClick={closeSidebar}
+              >
+                <FileText className="mr-3 h-5 w-5" />
+                Billing Report
+              </NavLink>
+              <NavLink
+                to="/admin/subscription"
+                className={({ isActive }) =>
+                  `flex items-center px-2 py-2 text-sm font-medium rounded-md ${
+                    isActive
                       ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-white'
                       : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'
                   }`
@@ -262,11 +277,25 @@ export default function DashboardLayout() {
 
           {!isAdmin() && !isBCBA() && (
             <>
-              <NavLink 
-                to="/therapist/schedule" 
-                className={({ isActive }) => 
+              <NavLink
+                to="/therapist/dashboard"
+                className={({ isActive }) =>
                   `flex items-center px-2 py-2 text-sm font-medium rounded-md ${
-                    isActive 
+                    isActive
+                      ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-white'
+                      : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'
+                  }`
+                }
+                onClick={closeSidebar}
+              >
+                <Home className="mr-3 h-5 w-5" />
+                Dashboard
+              </NavLink>
+              <NavLink
+                to="/therapist/schedule"
+                className={({ isActive }) =>
+                  `flex items-center px-2 py-2 text-sm font-medium rounded-md ${
+                    isActive
                       ? 'bg-gray-100 text-gray-900 dark:bg-gray-700 dark:text-white'
                       : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white'
                   }`

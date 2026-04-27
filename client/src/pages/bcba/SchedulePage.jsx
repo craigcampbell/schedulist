@@ -103,7 +103,13 @@ export default function BCBASchedulePage() {
     setIsFormPreFilled(false);
   };
   
-  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(() => {
+    const today = new Date();
+    const day = today.getDay();
+    if (day === 0) return addDays(today, 1); // Sunday → Monday
+    if (day === 6) return addDays(today, 2); // Saturday → Monday
+    return today;
+  });
   const [viewType, setViewType] = useState('grid');
   const [selectedTherapist, setSelectedTherapist] = useState(null);
   const [selectedPatient, setSelectedPatient] = useState(null);
@@ -147,7 +153,13 @@ export default function BCBASchedulePage() {
   }, [location.state]);
 
   // Navigate to date functions
-  const navigateToday = () => setSelectedDate(new Date());
+  const navigateToday = () => {
+    const today = new Date();
+    const day = today.getDay();
+    if (day === 0) setSelectedDate(addDays(today, 1));
+    else if (day === 6) setSelectedDate(addDays(today, 2));
+    else setSelectedDate(today);
+  };
   const navigatePrevious = () => setSelectedDate(prevDate => subDays(prevDate, 1));
   const navigateNext = () => setSelectedDate(prevDate => addDays(prevDate, 1));
 
@@ -656,7 +668,7 @@ export default function BCBASchedulePage() {
     refetch: refetchSchedule 
   } = useQuery({
     queryKey: ['bcbaSchedule', selectedDate.toISOString()],
-    queryFn: () => getSchedule(selectedDate),
+    queryFn: () => getSchedule('daily', format(selectedDate, 'yyyy-MM-dd')),
     enabled: viewType === 'daily' || viewType === 'weekly'
   });
   
@@ -667,8 +679,8 @@ export default function BCBASchedulePage() {
     error: teamScheduleError,
     refetch: refetchTeamSchedule 
   } = useQuery({
-    queryKey: ['teamSchedule', selectedDate.toISOString()],
-    queryFn: () => getTeamSchedule(selectedDate),
+    queryKey: ['teamSchedule', format(selectedDate, 'yyyy-MM-dd')],
+    queryFn: () => getTeamSchedule(format(selectedDate, 'yyyy-MM-dd')),
     enabled: viewType === 'team' || viewType === 'enhanced' || viewType === 'grid' || viewType === 'patient' || viewType === 'unified' || viewType === 'lunch' || viewType === 'continuity',
   });
   
@@ -843,9 +855,6 @@ export default function BCBASchedulePage() {
               ? `Week of ${format(selectedDate, 'MMMM d, yyyy')}`
               : format(selectedDate, 'EEEE, MMMM d, yyyy')}
           </h2>
-          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-            Current view: {viewType}
-          </p>
         </div>
       )}
 
@@ -963,7 +972,6 @@ export default function BCBASchedulePage() {
             </div>
           ) : (
             <PatientScheduleGrid
-              key={`patient-grid-${selectedDate.toISOString()}-${filteredTeamScheduleData?.appointments?.length || 0}`}
               patients={patients || []}
               appointments={(filteredTeamScheduleData?.appointments || []).map(app => ({
                 ...app,
@@ -971,19 +979,16 @@ export default function BCBASchedulePage() {
               }))}
               therapists={therapists || []}
               selectedDate={selectedDate}
+              locations={locations || []}
+              selectedLocation={selectedLocation}
               onAppointmentClick={handleAppointmentClick}
+              onAppointmentUpdate={handleAppointmentUpdate}
               onGapClick={({ patientId, timeSlot }) => {
-                if (canEditSelectedTeam) {
-                  console.log('Gap clicked:', { patientId, timeSlot });
-                }
+                if (canEditSelectedTeam) console.log('Gap clicked:', { patientId, timeSlot });
               }}
               onTherapistAssignment={async ({ appointmentId, therapistId, patientId, action }) => {
-                if (!canEditSelectedTeam) {
-                  console.log('User cannot edit this team\'s assignments');
-                  return;
-                }
+                if (!canEditSelectedTeam) return;
                 try {
-                  console.log('Updating therapist assignment:', { appointmentId, therapistId, patientId, action });
                   await updateAppointmentTherapist(appointmentId, therapistId);
                   queryClient.invalidateQueries(['teamSchedule']);
                   queryClient.invalidateQueries(['bcbaSchedule']);
@@ -994,7 +999,6 @@ export default function BCBASchedulePage() {
               }}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               canEdit={canEditSelectedTeam}
-              location={selectedLocation}
             />
           )}
         </div>
@@ -1085,10 +1089,9 @@ export default function BCBASchedulePage() {
               patients={patients || []}
               therapists={therapists || []}
               selectedDate={selectedDate}
-              onAppointmentUpdate={(updatedAppointment) => {
-                console.log('Appointment update requested:', updatedAppointment);
-                alert('Appointment updated! This feature will save to the database soon.');
-              }}
+              locations={locations || []}
+              selectedLocation={selectedLocation}
+              onAppointmentUpdate={handleAppointmentUpdate}
               onAppointmentClick={handleAppointmentClick}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
             />
@@ -1131,11 +1134,14 @@ export default function BCBASchedulePage() {
               <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
             </div>
           ) : filteredTeamScheduleData?.appointments?.length > 0 || filteredTeamScheduleData?.teams?.length > 0 ? (
-            <TeamScheduleView 
-              teams={filteredTeamScheduleData?.teams || []} 
-              appointments={filteredTeamScheduleData?.appointments || []} 
+            <TeamScheduleView
+              teams={filteredTeamScheduleData?.teams || []}
+              appointments={filteredTeamScheduleData?.appointments || []}
+              therapists={therapists || []}
+              patients={patients || []}
               selectedDate={selectedDate}
-              showLocationView={filteredTeamScheduleData?.teams?.length === 0}
+              locations={locations || []}
+              selectedLocation={selectedLocation}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               onAppointmentClick={handleAppointmentClick}
               onCellClick={({ therapistId, timeSlot, selectedDate, teamId, leadBcbaId }) => {
@@ -1143,7 +1149,6 @@ export default function BCBASchedulePage() {
               }}
               onAppointmentUpdate={handleAppointmentUpdate}
               canEdit={canEditSelectedTeam}
-              location={selectedLocation}
             />
           ) : (
             <div className="p-8 text-center text-gray-500 dark:text-gray-400">
@@ -1167,15 +1172,17 @@ export default function BCBASchedulePage() {
               <Button onClick={() => queryClient.invalidateQueries(['teamSchedule'])}>Try Again</Button>
             </div>
           ) : filteredTeamScheduleData?.appointments?.length > 0 || filteredTeamScheduleData?.teams?.length > 0 ? (
-            <EnhancedScheduleView 
-              teams={filteredTeamScheduleData?.teams || []} 
-              appointments={filteredTeamScheduleData?.appointments || []} 
+            <EnhancedScheduleView
+              teams={filteredTeamScheduleData?.teams || []}
+              appointments={filteredTeamScheduleData?.appointments || []}
+              therapists={therapists || []}
+              patients={patients || []}
               selectedDate={selectedDate}
+              locations={locations || []}
+              selectedLocation={selectedLocation}
               onAppointmentClick={handleAppointmentClick}
-              showLocationView={filteredTeamScheduleData?.teams?.length === 0}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
               onAppointmentUpdate={handleAppointmentUpdate}
-              location={selectedLocation}
             />
           ) : (
             <div className="p-8 text-center text-gray-500 dark:text-gray-400">

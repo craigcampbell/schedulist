@@ -7,9 +7,10 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:5050',
+        // Use Docker service name when running in container, fall back to localhost for local dev
+        target: process.env.VITE_API_BASE || 'http://localhost:5050',
         changeOrigin: true,
       },
     },
   },
-})      
+})

@@ -12,36 +12,34 @@ const getSchedule = async (req, res) => {
     const isAdmin = req.user.roles.includes('admin');
     const isBcba = req.user.roles.includes('bcba');
     
-    // Parse date or use current date
-    const baseDate = date ? new Date(date) : new Date();
-    
+    // Parse date as UTC midnight so timezone differences between client and server don't shift the day
+    const baseDate = date ? new Date(date + 'T00:00:00Z') : (() => { const d = new Date(); d.setUTCHours(0,0,0,0); return d; })();
+
     // Set start and end dates based on view
     let startDate, endDate;
-    
+
     switch (view.toLowerCase()) {
       case 'daily':
         startDate = new Date(baseDate);
-        startDate.setHours(0, 0, 0, 0);
         endDate = new Date(baseDate);
-        endDate.setHours(23, 59, 59, 999);
+        endDate.setUTCHours(23, 59, 59, 999);
         break;
       case 'weekly':
-        // Start of the week (Sunday)
+        // Start of the week (Sunday) in UTC
         startDate = new Date(baseDate);
-        startDate.setDate(baseDate.getDate() - baseDate.getDay());
-        startDate.setHours(0, 0, 0, 0);
-        
+        startDate.setUTCDate(baseDate.getUTCDate() - baseDate.getUTCDay());
+
         // End of the week (Saturday)
         endDate = new Date(startDate);
-        endDate.setDate(startDate.getDate() + 6);
-        endDate.setHours(23, 59, 59, 999);
+        endDate.setUTCDate(startDate.getUTCDate() + 6);
+        endDate.setUTCHours(23, 59, 59, 999);
         break;
       case 'monthly':
         // Start of the month
-        startDate = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1, 0, 0, 0, 0);
-        
+        startDate = new Date(Date.UTC(baseDate.getUTCFullYear(), baseDate.getUTCMonth(), 1));
+
         // End of the month
-        endDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 0, 23, 59, 59, 999);
+        endDate = new Date(Date.UTC(baseDate.getUTCFullYear(), baseDate.getUTCMonth() + 1, 0, 23, 59, 59, 999));
         break;
       default:
         return res.status(400).json({ message: 'Invalid view type. Use daily, weekly, or monthly.' });
@@ -915,15 +913,12 @@ const getTeamSchedule = async (req, res) => {
     const isAdmin = req.user.roles.includes('admin');
     const isBcba = req.user.roles.includes('bcba');
     
-    // Parse date or use current date
-    const baseDate = date ? new Date(date) : new Date();
-    
-    // Set start and end times for the day
-    const startDate = new Date(baseDate);
-    startDate.setHours(0, 0, 0, 0);
-    
-    const endDate = new Date(baseDate);
-    endDate.setHours(23, 59, 59, 999);
+    // Parse date as UTC midnight so timezone differences between client and server don't shift the day
+    const startDate = date
+      ? new Date(date + 'T00:00:00Z')
+      : (() => { const d = new Date(); d.setUTCHours(0,0,0,0); return d; })();
+    const endDate = new Date(startDate);
+    endDate.setUTCHours(23, 59, 59, 999);
     
     // Get teams and their members
     let teams;

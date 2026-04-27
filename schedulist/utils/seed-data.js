@@ -23,11 +23,53 @@ const PATIENT_COLORS = [
 
 // Comprehensive insurance providers
 const INSURANCE_PROVIDERS = [
-  'Blue Cross Blue Shield', 'Aetna', 'Cigna', 'UnitedHealthcare', 
+  'Blue Cross Blue Shield', 'Aetna', 'Cigna', 'UnitedHealthcare',
   'Humana', 'Kaiser Permanente', 'Anthem', 'Molina Healthcare',
   'Centene', 'Independence Blue Cross', 'Medicare', 'Medicaid',
   'Tricare', 'BCBS Federal', 'Oscar Health'
 ];
+
+// Insurance panels a provider could be credentialed with (matches frontend providerOptions.js)
+const PROVIDER_INSURANCE_PANELS = [
+  'Aetna', 'Anthem', 'Blue Cross Blue Shield (BCBS)', 'Cigna', 'Humana',
+  'Kaiser Permanente', 'Magellan Health', 'Medicaid', 'Molina Healthcare',
+  'Optum', 'TriCare', 'UnitedHealthcare (UHC)', 'WellCare',
+  'Beacon Health Options / Carelon', 'Ambetter',
+];
+
+const PROVIDER_CERTIFICATIONS = {
+  bcba: [
+    'BCBA – Board Certified Behavior Analyst',
+    'CPR/First Aid (AHA)',
+    'CPI – Crisis Prevention Institute (NVCI)',
+    'Safety Care (QBS)',
+    'VB-MAPP Trained Assessor',
+    'ABLLS-R Training',
+    'Mandated Reporter Training',
+    'HIPAA Certification',
+    'Positive Behavior Support (PBS)',
+  ],
+  therapist: [
+    'RBT – Registered Behavior Technician',
+    'CPR/First Aid (AHA)',
+    'CPR/First Aid (Red Cross)',
+    'CPI – Crisis Prevention Institute (NVCI)',
+    'Safety Care (QBS)',
+    'PROACT – Professional Management of Disruptive Behavior',
+    'MANDT System',
+    'Seizure First Aid',
+    'Mandated Reporter Training',
+    'HIPAA Certification',
+    'Bloodborne Pathogens',
+    'Discrete Trial Training (DTT)',
+    'Natural Environment Teaching (NET)',
+  ],
+};
+
+function randomSubset(arr, min = 1, max = 4) {
+  const count = faker.number.int({ min, max: Math.min(max, arr.length) });
+  return faker.helpers.arrayElements(arr, count);
+}
 
 // Appointment types with required hours distribution AND patient requirements
 const APPOINTMENT_TYPE_DISTRIBUTION = {
@@ -717,16 +759,47 @@ const seedDatabase = async () => {
 
 // Helper function to create a user with organization and role
 async function createUserWithOrg(userData, orgId, role) {
+  const isBcba = role.name === 'bcba';
+  const isTherapist = role.name === 'therapist';
+  const isProvider = isBcba || isTherapist;
+
+  let providerLevel = null;
+  let credentialsSuffix = null;
+  let npi = null;
+  let insurancePanels = null;
+  let certifications = null;
+
+  if (isBcba) {
+    providerLevel = faker.helpers.arrayElement(['master', 'master', 'doctorate']);
+    credentialsSuffix = providerLevel === 'doctorate' ? 'BCBA-D, LBA' : 'BCBA, LBA';
+    npi = faker.number.int({ min: 1000000000, max: 9999999999 }).toString();
+    insurancePanels = randomSubset(PROVIDER_INSURANCE_PANELS, 2, 6);
+    certifications = randomSubset(PROVIDER_CERTIFICATIONS.bcba, 3, 6);
+  } else if (isTherapist) {
+    providerLevel = faker.helpers.arrayElement(['paraprofessional', 'paraprofessional', 'bachelor']);
+    credentialsSuffix = providerLevel === 'bachelor' ? 'BA, RBT' : 'RBT';
+    npi = Math.random() > 0.4 ? faker.number.int({ min: 1000000000, max: 9999999999 }).toString() : null;
+    insurancePanels = randomSubset(PROVIDER_INSURANCE_PANELS, 0, 4);
+    certifications = randomSubset(PROVIDER_CERTIFICATIONS.therapist, 2, 5);
+  }
+
   const user = await db.User.create({
     firstName: userData ? userData.firstName : faker.person.firstName(),
     lastName: userData ? userData.lastName : faker.person.lastName(),
-    email: userData ? userData.email : faker.internet.email(), // Ensure no mailto: prefix
-    password: userData ? userData.password : 'Password123', // Pass the plain text password
+    email: userData ? userData.email : faker.internet.email(),
+    password: userData ? userData.password : 'Password123',
     phone: faker.phone.number(),
     organizationId: orgId,
     active: true,
     slackUserId: userData?.slackUserId || null,
-    videoLink: userData?.videoLink || null
+    videoLink: userData?.videoLink || null,
+    ...(isProvider && {
+      providerLevel,
+      credentials: credentialsSuffix,
+      npi: npi || null,
+      insurancePanels: insurancePanels?.length ? insurancePanels : null,
+      certifications: certifications?.length ? certifications : null,
+    }),
   });
 
   // Assign role
@@ -833,13 +906,21 @@ async function createDailyScheduleForTherapist(therapist, patients, locations, b
   let totalDailyHours = 0;
   const dailyAppointments = [];
   
-  // Vary start times between 7:30 AM and 9 AM
-  const startHour = faker.helpers.arrayElement([7.5, 8, 8.5, 9]);
-  let currentTime = setMinutes(setHours(date, Math.floor(startHour)), (startHour % 1) * 60);
-  
-  // End time varies between 4 PM and 6 PM
-  const endHour = faker.helpers.arrayElement([16, 17, 18]);
-  const endOfDay = setHours(date, endHour);
+  // Vary start times between 7:30 AM and 9 AM Eastern.
+  // Use explicit UTC hours so the seed works correctly regardless of the host timezone
+  // (local Mac vs Docker/UTC). EDT = UTC-4, so 7:30 AM EDT = 11:30 UTC.
+  const startHourEDT = faker.helpers.arrayElement([7.5, 8, 8.5, 9]);
+  let currentTime = new Date(date);
+  currentTime.setUTCHours(
+    Math.floor(startHourEDT) + 4,
+    (startHourEDT % 1) * 60,
+    0, 0
+  );
+
+  // End time varies between 4 PM and 6 PM Eastern (EDT = UTC-4)
+  const endHourEDT = faker.helpers.arrayElement([16, 17, 18]);
+  const endOfDay = new Date(date);
+  endOfDay.setUTCHours(endHourEDT + 4, 0, 0, 0);
   
   // Shuffle patients for variety
   const shuffledPatients = [...patients].sort(() => 0.5 - Math.random());
@@ -1121,9 +1202,10 @@ async function createPatientScheduleData(orgPatients) {
         
         for (let i = 0; i < numBlocks; i++) {
           const blockDate = addDays(weekStart, faker.number.int({ min: 0, max: 4 })); // Mon-Fri
-          const blockHour = faker.number.int({ min: 8, max: 16 });
+          // UTC hours for Eastern time (EDT = UTC-4)
+          const blockHourEDT = faker.number.int({ min: 8, max: 16 });
           const startTime = new Date(blockDate);
-          startTime.setHours(blockHour, 0, 0, 0);
+          startTime.setUTCHours(blockHourEDT + 4, 0, 0, 0);
           
           const duration = faker.helpers.arrayElement([60, 90, 120]); // 1-2 hours
           const endTime = new Date(startTime.getTime() + duration * 60 * 1000);

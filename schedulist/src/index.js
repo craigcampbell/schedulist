@@ -14,6 +14,7 @@ const patientRoutes = require('./routes/patient.routes');
 const scheduleRoutes = require('./routes/schedule.routes');
 const patientSchedulingRoutes = require('./routes/patientScheduling.routes');
 const adminRoutes = require('./routes/admin.routes');
+const billingRoutes = require('./routes/billing.routes');
 const organizationRoutes = require('./routes/organization.routes');
 const proxyRoutes = require('./routes/proxy.routes');
 
@@ -42,6 +43,7 @@ app.use('/api/patient', patientRoutes);
 app.use('/api/schedule', scheduleRoutes);
 app.use('/api/patient-scheduling', patientSchedulingRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin/billing', billingRoutes);
 app.use('/api/organization', organizationRoutes);
 app.use('/api/proxy', proxyRoutes);
 

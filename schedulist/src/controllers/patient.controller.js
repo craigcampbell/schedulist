@@ -145,6 +145,18 @@ const getPatientById = async (req, res) => {
       requiredWeeklyHours: patient.requiredWeeklyHours,
       status: patient.status,
       color: patient.color,
+      teamId: patient.teamId,
+      serviceLocationType: patient.serviceLocationType,
+      // Billing / insurance fields
+      memberId: patient.memberId,
+      groupNumber: patient.groupNumber,
+      primaryDiagnosisCode: patient.primaryDiagnosisCode,
+      secondaryDiagnosisCodes: patient.secondaryDiagnosisCodes,
+      authorizationNumber: patient.authorizationNumber,
+      authorizationStartDate: patient.authorizationStartDate,
+      authorizationEndDate: patient.authorizationEndDate,
+      authorizedUnits: patient.authorizedUnits,
+      insuranceNotes: patient.insuranceNotes,
       assignees: patient.Assignees,
       upcomingAppointments: patient.Appointments.map(appt => ({
         id: appt.id,
@@ -187,9 +199,20 @@ const createPatient = async (req, res) => {
       address,
       requiredWeeklyHours,
       color,
-      assigneeIds
+      assigneeIds,
+      teamId,
+      serviceLocationType,
+      memberId,
+      groupNumber,
+      primaryDiagnosisCode,
+      secondaryDiagnosisCodes,
+      authorizationNumber,
+      authorizationStartDate,
+      authorizationEndDate,
+      authorizedUnits,
+      insuranceNotes,
     } = req.body;
-    
+
     // Create the patient with virtual setters handling encryption
     const patient = await Patient.create({
       firstName,
@@ -201,6 +224,17 @@ const createPatient = async (req, res) => {
       address,
       requiredWeeklyHours,
       color,
+      teamId,
+      serviceLocationType,
+      memberId,
+      groupNumber,
+      primaryDiagnosisCode: primaryDiagnosisCode || 'F84.0',
+      secondaryDiagnosisCodes: secondaryDiagnosisCodes || null,
+      authorizationNumber,
+      authorizationStartDate: authorizationStartDate || null,
+      authorizationEndDate: authorizationEndDate || null,
+      authorizedUnits: authorizedUnits ? parseInt(authorizedUnits) : null,
+      insuranceNotes,
       status: 'active'
     });
     
@@ -247,23 +281,31 @@ const updatePatient = async (req, res) => {
       status,
       color,
       teamId,
-      assigneeIds
+      assigneeIds,
+      // Billing / insurance fields
+      memberId,
+      groupNumber,
+      primaryDiagnosisCode,
+      secondaryDiagnosisCodes,
+      authorizationNumber,
+      authorizationStartDate,
+      authorizationEndDate,
+      authorizedUnits,
+      insuranceNotes,
     } = req.body;
-    
-    console.log('Updating patient:', id, 'with data:', req.body);
-    
+
     const patient = await Patient.findByPk(id);
-    
+
     if (!patient) {
       return res.status(404).json({ message: 'Patient not found' });
     }
-    
+
     // Ensure the patient belongs to the user's organization
     if (patient.organizationId !== req.user.organizationId) {
       return res.status(403).json({ message: 'Access denied' });
     }
-    
-    // Update fields (virtual setters will handle encryption)
+
+    // Update fields (virtual setters handle encryption)
     if (firstName !== undefined) patient.firstName = firstName;
     if (lastName !== undefined) patient.lastName = lastName;
     if (dateOfBirth !== undefined) patient.dateOfBirth = dateOfBirth;
@@ -275,6 +317,16 @@ const updatePatient = async (req, res) => {
     if (status !== undefined) patient.status = status;
     if (color !== undefined) patient.color = color;
     if (teamId !== undefined) patient.teamId = teamId;
+    // Billing / insurance fields
+    if (memberId !== undefined) patient.memberId = memberId;
+    if (groupNumber !== undefined) patient.groupNumber = groupNumber;
+    if (primaryDiagnosisCode !== undefined) patient.primaryDiagnosisCode = primaryDiagnosisCode;
+    if (secondaryDiagnosisCodes !== undefined) patient.secondaryDiagnosisCodes = secondaryDiagnosisCodes;
+    if (authorizationNumber !== undefined) patient.authorizationNumber = authorizationNumber;
+    if (authorizationStartDate !== undefined) patient.authorizationStartDate = authorizationStartDate || null;
+    if (authorizationEndDate !== undefined) patient.authorizationEndDate = authorizationEndDate || null;
+    if (authorizedUnits !== undefined) patient.authorizedUnits = authorizedUnits ? parseInt(authorizedUnits) : null;
+    if (insuranceNotes !== undefined) patient.insuranceNotes = insuranceNotes;
     
     try {
       await patient.save();

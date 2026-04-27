@@ -87,6 +87,54 @@ module.exports = (sequelize, DataTypes) => {
       },
       comment: 'Team associated with this appointment (from patient)'
     },
+
+    // ── Billing fields (added via migration 20250721000000) ──────────────────
+    billingStatus: {
+      type: DataTypes.ENUM('unbilled', 'ready', 'submitted', 'paid', 'denied', 'void'),
+      defaultValue: 'unbilled',
+      allowNull: false,
+    },
+    cptCode: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+      comment: 'CPT code override; auto-computed if null',
+    },
+    diagnosisCode: {
+      type: DataTypes.STRING(10),
+      allowNull: true,
+    },
+    modifiers: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+    placeOfServiceCode: {
+      type: DataTypes.STRING(2),
+      allowNull: true,
+    },
+    billedUnits: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    billedAmount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
+    paidAmount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+    },
+    claimNumber: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+    authorizationNumber: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+    billingNotes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
   }, {
     timestamps: true,
   });

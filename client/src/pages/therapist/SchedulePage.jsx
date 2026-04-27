@@ -1,406 +1,407 @@
-import { useState, useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState, useMemo } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../../context/auth-context';
-import { format, addDays, subDays, startOfDay, isSameDay } from 'date-fns';
-import { 
-  Calendar, 
-  ChevronLeft, 
-  ChevronRight, 
-  Clock, 
-  User,
-  Settings,
-  Users
-} from 'lucide-react';
-import { Button } from '../../components/ui/button';
-import { getTherapistSchedule, getTeamSchedule } from '../../api/schedule';
-import { calculateAppointmentStyle, formatTime } from '../../utils/date-utils';
-import EnhancedScheduleView from '../../components/schedule/EnhancedScheduleView';
-import { groupConsecutiveAppointments } from '../../utils/appointment-grouping';
+import { format, addDays, subDays, isSameDay, isToday, startOfWeek } from 'date-fns';
+import { MapPin, Clock, ChevronLeft, ChevronRight, X, User, Stethoscope, Coffee, ClipboardList, Shield, Sparkles } from 'lucide-react';
+import { getTherapistSchedule } from '../../api/schedule';
 
+// ─── Style map ────────────────────────────────────────────────────────────────
+const SERVICE_STYLES = {
+  direct:      { bg: '#EFF6FF', border: '#3B82F6', text: '#1D4ED8', pill: '#3B82F6', label: 'Direct Therapy',  icon: Stethoscope },
+  circle:      { bg: '#FDF2F8', border: '#EC4899', text: '#9D174D', pill: '#EC4899', label: 'Circle Time',     icon: Sparkles },
+  indirect:    { bg: '#F3F4F6', border: '#6B7280', text: '#374151', pill: '#6B7280', label: 'Indirect',        icon: ClipboardList },
+  supervision: { bg: '#F5F3FF', border: '#8B5CF6', text: '#5B21B6', pill: '#8B5CF6', label: 'Supervision',     icon: Shield },
+  lunch:       { bg: '#ECFDF5', border: '#10B981', text: '#065F46', pill: '#10B981', label: 'Lunch',           icon: Coffee },
+  cleaning:    { bg: '#FFF7ED', border: '#F97316', text: '#C2410C', pill: '#F97316', label: 'Cleaning',        icon: ClipboardList },
+};
+const DEFAULT_STYLE = SERVICE_STYLES.direct;
+
+function styleFor(appt) {
+  return SERVICE_STYLES[appt.serviceType] || DEFAULT_STYLE;
+}
+
+function fmt12(iso) {
+  const d = new Date(iso);
+  const h = d.getHours(), m = d.getMinutes();
+  const p = h >= 12 ? 'pm' : 'am';
+  const hd = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${hd}${m ? ':' + String(m).padStart(2, '0') : ''}${p}`;
+}
+
+function fmtDur(iso1, iso2) {
+  const mins = Math.round((new Date(iso2) - new Date(iso1)) / 60000);
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), r = mins % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
+
+// ─── Week strip ───────────────────────────────────────────────────────────────
+function WeekStrip({ selectedDate, onSelect, appointmentDates }) {
+  const mon = startOfWeek(selectedDate, { weekStartsOn: 1 });
+  const days = Array.from({ length: 7 }, (_, i) => addDays(mon, i));
+
+  return (
+    <div className="flex gap-1 justify-between px-1">
+      {days.map(d => {
+        const isSelected = isSameDay(d, selectedDate);
+        const todayDay = isToday(d);
+        const hasAppts = appointmentDates.some(ad => isSameDay(ad, d));
+        return (
+          <button
+            key={d.toISOString()}
+            onClick={() => onSelect(d)}
+            className="flex flex-col items-center gap-1 flex-1 py-2 rounded-2xl transition-all"
+            style={{
+              background: isSelected ? '#3B82F6' : 'transparent',
+            }}
+          >
+            <span className="text-[10px] font-semibold uppercase tracking-wide"
+              style={{ color: isSelected ? '#BFDBFE' : '#9CA3AF' }}>
+              {format(d, 'EEE')}
+            </span>
+            <span className="text-sm font-bold"
+              style={{ color: isSelected ? '#fff' : todayDay ? '#3B82F6' : '#1F2937' }}>
+              {format(d, 'd')}
+            </span>
+            {hasAppts && !isSelected && (
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+            )}
+            {(!hasAppts || isSelected) && <span className="w-1.5 h-1.5" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Appointment card ─────────────────────────────────────────────────────────
+function ApptCard({ appt, onTap, isNext }) {
+  const s = styleFor(appt);
+  const Icon = s.icon;
+  const patientName = appt.patient
+    ? `${appt.patient.firstName || appt.patient.decryptedFirstName || ''} ${appt.patient.lastName || appt.patient.decryptedLastName || ''}`.trim()
+    : null;
+
+  return (
+    <button
+      onClick={() => onTap(appt)}
+      className="w-full text-left rounded-2xl overflow-hidden shadow-sm active:scale-[0.98] transition-transform"
+      style={{ border: `2px solid ${s.border}20`, background: s.bg }}
+    >
+      {/* Accent bar */}
+      <div className="h-1 w-full" style={{ background: s.pill }} />
+
+      <div className="px-4 py-3 flex items-start gap-3">
+        {/* Icon bubble */}
+        <div
+          className="mt-0.5 w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
+          style={{ background: s.pill + '22', border: `1.5px solid ${s.pill}44` }}
+        >
+          <Icon size={18} style={{ color: s.pill }} />
+        </div>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: s.text }}>
+              {s.label}
+            </span>
+            {isNext && (
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500 text-white">
+                NEXT
+              </span>
+            )}
+          </div>
+
+          {patientName && (
+            <p className="text-base font-bold text-gray-800 leading-tight mt-0.5 truncate">
+              {patientName}
+            </p>
+          )}
+
+          <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+            <span className="flex items-center gap-1 text-xs text-gray-500">
+              <Clock size={12} />
+              {fmt12(appt.startTime)} – {fmt12(appt.endTime)}
+              <span className="text-gray-400">· {fmtDur(appt.startTime, appt.endTime)}</span>
+            </span>
+            {appt.location?.name && (
+              <span className="flex items-center gap-1 text-xs text-gray-500">
+                <MapPin size={12} />
+                {appt.location.name}
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ─── Detail bottom sheet ──────────────────────────────────────────────────────
+function DetailSheet({ appt, onClose }) {
+  if (!appt) return null;
+  const s = styleFor(appt);
+  const Icon = s.icon;
+  const patientName = appt.patient
+    ? `${appt.patient.firstName || appt.patient.decryptedFirstName || ''} ${appt.patient.lastName || appt.patient.decryptedLastName || ''}`.trim()
+    : null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end"
+      style={{ background: 'rgba(0,0,0,0.4)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full rounded-t-3xl bg-white shadow-2xl overflow-hidden"
+        onClick={e => e.stopPropagation()}
+        style={{ maxHeight: '85vh' }}
+      >
+        {/* Handle */}
+        <div className="flex justify-center pt-3 pb-1">
+          <div className="w-10 h-1 rounded-full bg-gray-200" />
+        </div>
+
+        {/* Colored header */}
+        <div className="px-5 py-4 flex items-center gap-3" style={{ background: s.bg, borderBottom: `2px solid ${s.border}30` }}>
+          <div className="w-12 h-12 rounded-2xl flex items-center justify-center" style={{ background: s.pill }}>
+            <Icon size={22} color="#fff" />
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest" style={{ color: s.text }}>{s.label}</p>
+            {patientName && <p className="text-xl font-bold text-gray-900 leading-tight">{patientName}</p>}
+          </div>
+          <button onClick={onClose} className="ml-auto p-2 rounded-full hover:bg-black/5">
+            <X size={20} className="text-gray-400" />
+          </button>
+        </div>
+
+        {/* Details */}
+        <div className="px-5 py-4 space-y-4 overflow-y-auto" style={{ maxHeight: 'calc(85vh - 120px)' }}>
+          <Row icon={<Clock size={16} className="text-blue-500" />} label="Time">
+            <p className="font-semibold text-gray-800">{fmt12(appt.startTime)} – {fmt12(appt.endTime)}</p>
+            <p className="text-sm text-gray-500">{fmtDur(appt.startTime, appt.endTime)} · {format(new Date(appt.startTime), 'EEEE, MMMM d')}</p>
+          </Row>
+
+          {appt.location?.name && (
+            <Row icon={<MapPin size={16} className="text-rose-400" />} label="Location">
+              <p className="font-semibold text-gray-800">{appt.location.name}</p>
+              {appt.location.address && <p className="text-sm text-gray-500">{appt.location.address}</p>}
+            </Row>
+          )}
+
+          {appt.patient && (
+            <Row icon={<User size={16} className="text-purple-400" />} label="Patient">
+              <p className="font-semibold text-gray-800">{patientName}</p>
+            </Row>
+          )}
+
+          <Row icon={<Sparkles size={16} className="text-amber-400" />} label="Status">
+            <span
+              className="inline-flex items-center px-3 py-1 rounded-full text-xs font-bold"
+              style={{ background: s.pill + '22', color: s.text }}
+            >
+              {appt.status}
+            </span>
+          </Row>
+
+          {appt.notes && (
+            <Row icon={<ClipboardList size={16} className="text-gray-400" />} label="Notes">
+              <p className="text-gray-700 text-sm leading-relaxed">{appt.notes}</p>
+            </Row>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row({ icon, label, children }) {
+  return (
+    <div className="flex gap-3">
+      <div className="w-8 h-8 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0 mt-0.5">
+        {icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-0.5">{label}</p>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─── Empty state ──────────────────────────────────────────────────────────────
+function EmptyDay({ date }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-center">
+      <div className="w-20 h-20 rounded-3xl bg-blue-50 flex items-center justify-center mb-4">
+        <Sparkles size={32} className="text-blue-300" />
+      </div>
+      <p className="text-lg font-bold text-gray-700">Free day!</p>
+      <p className="text-sm text-gray-400 mt-1">No sessions on {format(date, 'EEEE, MMM d')}</p>
+    </div>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
 export default function TherapistSchedulePage() {
   const { user } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [viewType, setViewType] = useState('daily');
-  const [selectedAppointment, setSelectedAppointment] = useState(null);
-  const queryClient = useQueryClient();
-  
-  // Fetch schedule data
-  const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['therapistSchedule', viewType, selectedDate],
-    queryFn: () => getTherapistSchedule(7), // Get next 7 days
-    enabled: viewType === 'daily' || viewType === 'weekly'
-  });
-  
-  // Fetch team schedule data for enhanced view
-  const { data: teamScheduleData, isLoading: isLoadingTeamSchedule, error: teamScheduleError } = useQuery({
-    queryKey: ['teamSchedule', selectedDate.toISOString()],
-    queryFn: () => getTeamSchedule(selectedDate.toISOString()),
-    enabled: viewType === 'enhanced'
-  });
-  
-  // Navigate to previous day/week
-  const navigatePrevious = () => {
-    if (viewType === 'daily') {
-      setSelectedDate(subDays(selectedDate, 1));
-    } else if (viewType === 'weekly' || viewType === 'enhanced') {
-      setSelectedDate(subDays(selectedDate, 7));
-    }
-  };
-  
-  // Navigate to next day/week
-  const navigateNext = () => {
-    if (viewType === 'daily') {
-      setSelectedDate(addDays(selectedDate, 1));
-    } else if (viewType === 'weekly' || viewType === 'enhanced') {
-      setSelectedDate(addDays(selectedDate, 7));
-    }
-  };
-  
-  // Navigate to today
-  const navigateToday = () => {
-    setSelectedDate(new Date());
-  };
-  
-  // Toggle between daily, weekly, and enhanced views
-  const toggleViewType = () => {
-    if (viewType === 'daily') {
-      setViewType('weekly');
-    } else if (viewType === 'weekly') {
-      setViewType('enhanced');
-    } else {
-      setViewType('daily');
-    }
-  };
-  
-  // Handle appointment click
-  const handleAppointmentClick = (appointment) => {
-    setSelectedAppointment(appointment);
-  };
-  
-  // Close appointment details modal
-  const closeAppointmentDetails = () => {
-    setSelectedAppointment(null);
-  };
-  
-  // Generate time slots from 8 AM to 6 PM
-  const timeSlots = [];
-  for (let hour = 8; hour <= 18; hour++) {
-    timeSlots.push(new Date(selectedDate).setHours(hour, 0, 0, 0));
-  }
-  
-  // Filter appointments for daily view and group consecutive ones
-  const filterDailyAppointments = () => {
-    if (!data || !data.appointments) return [];
-    
-    const filteredApps = data.appointments.filter(appointment => {
-      const appointmentDate = new Date(appointment.startTime);
-      return isSameDay(appointmentDate, selectedDate);
-    });
-    
-    // Sort by start time
-    const sortedApps = filteredApps.sort((a, b) => 
-      new Date(a.startTime) - new Date(b.startTime)
-    );
-    
-    // Group consecutive appointments
-    return groupConsecutiveAppointments(sortedApps);
-  };
-  
-  // Format patient name for display
-  const formatPatientName = (patient) => {
-    if (!patient) return 'Unknown';
-    const firstTwo = patient.firstName?.substring(0, 2) || '--';
-    const lastTwo = patient.lastName?.substring(0, 2) || '--';
-    return `${firstTwo}${lastTwo}`;
-  };
+  const [selected, setSelected] = useState(null);
 
-  // Format full patient name for hover/tooltip
-  const formatFullPatientName = (patient) => {
-    if (!patient) return 'Unknown';
-    return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
-  };
-  
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['therapistSchedule'],
+    queryFn: () => getTherapistSchedule(14),
+  });
+
+  const allAppts = useMemo(() => data?.appointments || [], [data]);
+
+  // Dates that have appointments (for week strip dots)
+  const appointmentDates = useMemo(
+    () => allAppts.map(a => new Date(a.startTime)),
+    [allAppts]
+  );
+
+  // Appointments for selected day, sorted
+  const dayAppts = useMemo(() =>
+    allAppts
+      .filter(a => isSameDay(new Date(a.startTime), selectedDate))
+      .sort((a, b) => new Date(a.startTime) - new Date(b.startTime)),
+    [allAppts, selectedDate]
+  );
+
+  // Which appointment is "next" (soonest upcoming today)
+  const nextApptId = useMemo(() => {
+    if (!isToday(selectedDate)) return null;
+    const now = Date.now();
+    const upcoming = dayAppts.filter(a => new Date(a.startTime) > now);
+    return upcoming[0]?.id || null;
+  }, [dayAppts, selectedDate]);
+
+  // Stats for today
+  const totalHours = useMemo(() => {
+    const mins = dayAppts.reduce((s, a) => s + (new Date(a.endTime) - new Date(a.startTime)) / 60000, 0);
+    return (mins / 60).toFixed(1);
+  }, [dayAppts]);
+
+  const directCount = useMemo(() =>
+    dayAppts.filter(a => a.serviceType === 'direct' || a.serviceType === 'circle').length,
+    [dayAppts]
+  );
+
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-center mb-4 space-y-2 sm:space-y-0">
-        <h1 className="text-2xl font-bold">My Schedule</h1>
-        
-        <div className="flex items-center space-x-2">
-          <Button variant="outline" size="sm" onClick={navigatePrevious}>
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          
-          <Button variant="outline" size="sm" onClick={navigateToday}>
-            Today
-          </Button>
-          
-          <Button variant="outline" size="sm" onClick={navigateNext}>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          
-          <Button variant="outline" size="sm" onClick={toggleViewType}>
-            {viewType === 'daily' ? (
-              <>
-                <Calendar className="h-4 w-4 mr-2" />
-                <span>Weekly</span>
-              </>
-            ) : viewType === 'weekly' ? (
-              <>
-                <Settings className="h-4 w-4 mr-2" />
-                <span>Enhanced</span>
-              </>
+    <div className="min-h-full flex flex-col -m-4 bg-gray-50">
+
+      {/* ── Top header ────────────────────────────────────────────────────── */}
+      <div className="bg-white px-4 pt-4 pb-3 shadow-sm sticky top-0 z-10">
+        {/* Greeting + nav */}
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-xs text-gray-400 font-medium uppercase tracking-wider">My Schedule</p>
+            <h1 className="text-xl font-bold text-gray-900 leading-tight">
+              {isToday(selectedDate) ? 'Today' : format(selectedDate, 'MMMM d')}
+            </h1>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setSelectedDate(d => subDays(d, 7))}
+              className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"
+            >
+              <ChevronLeft size={18} className="text-gray-600" />
+            </button>
+            <button
+              onClick={() => setSelectedDate(new Date())}
+              className="px-3 h-9 rounded-full bg-gray-100 text-xs font-semibold text-gray-600"
+            >
+              Today
+            </button>
+            <button
+              onClick={() => setSelectedDate(d => addDays(d, 7))}
+              className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"
+            >
+              <ChevronRight size={18} className="text-gray-600" />
+            </button>
+          </div>
+        </div>
+
+        {/* Week strip */}
+        <WeekStrip
+          selectedDate={selectedDate}
+          onSelect={setSelectedDate}
+          appointmentDates={appointmentDates}
+        />
+      </div>
+
+      {/* ── Content ───────────────────────────────────────────────────────── */}
+      <div className="flex-1 px-4 pt-4 pb-24">
+
+        {isLoading && (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <div className="w-8 h-8 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
+            <p className="text-sm text-gray-400">Loading your schedule…</p>
+          </div>
+        )}
+
+        {error && (
+          <div className="flex flex-col items-center justify-center py-20 gap-3">
+            <p className="text-sm text-red-500">Couldn't load schedule.</p>
+            <button onClick={refetch} className="text-sm text-blue-500 underline">Try again</button>
+          </div>
+        )}
+
+        {!isLoading && !error && (
+          <>
+            {/* Day stats pill */}
+            {dayAppts.length > 0 && (
+              <div className="flex gap-2 mb-4">
+                <StatPill label="Sessions" value={dayAppts.length} color="#3B82F6" />
+                <StatPill label="Direct" value={directCount} color="#10B981" />
+                <StatPill label="Hours" value={`${totalHours}h`} color="#8B5CF6" />
+              </div>
+            )}
+
+            {/* Timeline */}
+            {dayAppts.length === 0 ? (
+              <EmptyDay date={selectedDate} />
             ) : (
-              <>
-                <Clock className="h-4 w-4 mr-2" />
-                <span>Daily</span>
-              </>
-            )}
-          </Button>
-        </div>
-      </div>
-      
-      {/* Date display */}
-      <div className="mb-6 text-center">
-        <h2 className="text-xl font-semibold">
-          {viewType === 'daily' 
-            ? format(selectedDate, 'PPPP') 
-            : `Week of ${format(startOfDay(selectedDate), 'MMMM d, yyyy')}`}
-        </h2>
-      </div>
-      
-      {/* Loading state */}
-      {((viewType === 'daily' || viewType === 'weekly') && isLoading) || 
-       (viewType === 'enhanced' && isLoadingTeamSchedule) ? (
-        <div className="flex-1 flex justify-center items-center">
-          <p>Loading schedule...</p>
-        </div>
-      ) : null}
-      
-      {/* Error state */}
-      {((viewType === 'daily' || viewType === 'weekly') && error) || 
-       (viewType === 'enhanced' && teamScheduleError) ? (
-        <div className="flex-1 flex justify-center items-center">
-          <div className="text-center">
-            <p className="text-red-500 mb-4">Failed to load schedule</p>
-            <Button onClick={viewType === 'enhanced' ? 
-              () => queryClient.invalidateQueries(['teamSchedule']) : 
-              refetch}>Try Again</Button>
-          </div>
-        </div>
-      ) : null}
-      
-      {/* Daily View */}
-      {!isLoading && !error && viewType === 'daily' && (
-        <div className="flex-1 overflow-y-auto relative">
-          <div className="schedule-grid">
-            {/* Time column */}
-            <div className="border-r border-gray-200 dark:border-gray-700">
-              {timeSlots.map((time, i) => (
-                <div key={i} className="h-24 px-2 py-1 border-b border-gray-200 dark:border-gray-700 text-xs font-medium text-gray-500 dark:text-gray-400">
-                  {format(time, 'h a')}
-                </div>
-              ))}
-            </div>
-            
-            {/* Appointments column */}
-            <div className="relative">
-              {timeSlots.map((time, i) => (
-                <div key={i} className="h-24 border-b border-gray-200 dark:border-gray-700">
-                  {/* Half-hour line */}
-                  <div className="absolute w-full h-px bg-gray-100 dark:bg-gray-800" style={{ top: `${i * 96 + 48}px` }}></div>
-                </div>
-              ))}
-              
-              {/* Appointments */}
-              {filterDailyAppointments().map((group) => {
-                const style = calculateAppointmentStyle(group, 96); // 24px per hour * 4 = 96
-                
-                return (
-                  <div
-                    key={group.id}
-                    className="appointment cursor-pointer absolute p-2 border-l-4 border-blue-500 bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors rounded-md"
-                    style={{
-                      ...style,
-                      left: '4px',
-                      right: '4px',
-                    }}
-                    onClick={() => handleAppointmentClick(group.appointments[0])}
-                  >
-                    <div className="text-xs font-medium">
-                      {formatTime(group.startTime)} - {formatTime(group.endTime)}
-                    </div>
-                    <div className="font-medium truncate">
-                      <span 
-                        title={formatFullPatientName(group.patient)}
-                        className="cursor-help"
-                      >
-                        {formatPatientName(group.patient)}
-                      </span>
-                      {group.appointments.length > 1 && (
-                        <span className="ml-1 text-xs text-gray-600 dark:text-gray-400">
-                          ({group.appointments.length} sessions)
-                        </span>
+              <div className="space-y-3">
+                {dayAppts.map((appt, i) => {
+                  const prevEnd = i > 0 ? new Date(dayAppts[i - 1].endTime) : null;
+                  const gapMins = prevEnd ? Math.round((new Date(appt.startTime) - prevEnd) / 60000) : null;
+                  return (
+                    <div key={appt.id}>
+                      {/* Gap indicator */}
+                      {gapMins !== null && gapMins > 0 && (
+                        <div className="flex items-center gap-2 py-1.5 px-2">
+                          <div className="w-px h-4 bg-gray-200 mx-3" />
+                          <span className="text-xs text-gray-400">{gapMins}m gap</span>
+                        </div>
                       )}
+                      <ApptCard
+                        appt={appt}
+                        isNext={appt.id === nextApptId}
+                        onTap={setSelected}
+                      />
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-      
-      {/* Weekly View */}
-      {!isLoading && !error && viewType === 'weekly' && (
-        <div className="flex-1 overflow-y-auto">
-          <div className="space-y-4">
-            {(() => {
-              // Group all appointments
-              const sortedApps = data?.appointments?.sort((a, b) => 
-                new Date(a.startTime) - new Date(b.startTime)
-              ) || [];
-              const appointmentGroups = groupConsecutiveAppointments(sortedApps);
-              
-              return appointmentGroups.map(group => (
-                <div
-                  key={group.id}
-                  className="p-4 border rounded-lg bg-white dark:bg-gray-800 shadow-sm hover:shadow-md transition-shadow cursor-pointer"
-                  onClick={() => handleAppointmentClick(group.appointments[0])}
-                >
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h3 className="font-medium">
-                        <span 
-                          title={formatFullPatientName(group.patient)}
-                          className="cursor-help"
-                        >
-                          {formatPatientName(group.patient)}
-                        </span>
-                        {group.appointments.length > 1 && (
-                          <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">
-                            {group.appointments.length} sessions
-                          </span>
-                        )}
-                      </h3>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">
-                        {format(new Date(group.startTime), 'EEEE, MMMM d')}
-                      </p>
-                      <p className="text-sm text-gray-600 dark:text-gray-400">
-                        {formatTime(group.startTime)} - {formatTime(group.endTime)}
-                        {group.totalDuration && <span className="ml-2">({group.totalDuration} mins)</span>}
-                      </p>
-                    </div>
-                    <div className="text-sm px-2 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">
-                      {group.appointments[0].status}
-                    </div>
-                  </div>
-                  
-                  <div className="mt-2 flex items-center text-sm text-gray-600 dark:text-gray-400">
-                    <User className="h-4 w-4 mr-1" />
-                    <span>{group.location?.name || 'No location'}</span>
-                  </div>
-                </div>
-              ));
-            })()}
-            
-            {data?.appointments?.length === 0 && (
-              <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-                <Calendar className="h-12 w-12 mx-auto mb-4 opacity-30" />
-                <p>No appointments scheduled for this week.</p>
+                  );
+                })}
               </div>
             )}
-          </div>
-        </div>
-      )}
-      
-      {/* Enhanced View */}
-      {!isLoadingTeamSchedule && !teamScheduleError && viewType === 'enhanced' && (
-        <div className="flex-1 overflow-y-auto">
-          {teamScheduleData?.teams?.length > 0 ? (
-            <EnhancedScheduleView 
-              teams={teamScheduleData.teams} 
-              appointments={teamScheduleData.appointments || []} 
-              selectedDate={selectedDate}
-              onAppointmentClick={handleAppointmentClick}
-              userRole="therapist"
-              onAppointmentUpdate={(updatedAppointment) => {
-                console.log('Appointment update requested:', updatedAppointment);
-                // Here you would add the actual mutation to update the appointment
-                alert('Drag and drop rescheduling is coming soon!');
-              }}
-            />
-          ) : (
-            <div className="p-8 text-center text-gray-500 dark:text-gray-400">
-              <Users className="h-12 w-12 mx-auto mb-4 opacity-30" />
-              <p>No teams available. Create teams to use this view.</p>
-            </div>
-          )}
-        </div>
-      )}
-      
-      {/* Appointment Details Modal */}
-      {selectedAppointment && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black bg-opacity-50 flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6">
-            <div className="flex justify-between items-start mb-4">
-              <h2 className="text-xl font-bold">Appointment Details</h2>
-              <Button variant="ghost" size="sm" onClick={closeAppointmentDetails}>
-                ✕
-              </Button>
-            </div>
-            
-            <div className="space-y-4">
-              <div>
-                <h3 className="font-medium text-gray-700 dark:text-gray-300">Patient</h3>
-                <p className="text-lg">
-                  {formatFullPatientName(selectedAppointment.patient)}
-                </p>
-              </div>
-              
-              <div>
-                <h3 className="font-medium text-gray-700 dark:text-gray-300">Date & Time</h3>
-                <p>{format(new Date(selectedAppointment.startTime), 'PPPP')}</p>
-                <p>{formatTime(selectedAppointment.startTime)} - {formatTime(selectedAppointment.endTime)}</p>
-              </div>
-              
-              <div>
-                <h3 className="font-medium text-gray-700 dark:text-gray-300">Location</h3>
-                <p>{selectedAppointment.location?.name || 'No location'}</p>
-              </div>
-              
-              <div>
-                <h3 className="font-medium text-gray-700 dark:text-gray-300">Status</h3>
-                <div className="inline-block px-2 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100">
-                  {selectedAppointment.status}
-                </div>
-              </div>
-              
-              {selectedAppointment.notes && (
-                <div>
-                  <h3 className="font-medium text-gray-700 dark:text-gray-300">Notes</h3>
-                  <p className="text-gray-600 dark:text-gray-400">{selectedAppointment.notes}</p>
-                </div>
-              )}
-              
-              <div className="flex justify-end space-x-2 pt-4">
-                <Button variant="outline" onClick={closeAppointmentDetails}>
-                  Close
-                </Button>
-                <Button 
-                  variant="default" 
-                  onClick={() => {
-                    // Navigate to patient page (to be implemented)
-                    closeAppointmentDetails();
-                  }}
-                >
-                  View Patient
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
+
+      {/* ── Detail sheet ──────────────────────────────────────────────────── */}
+      <DetailSheet appt={selected} onClose={() => setSelected(null)} />
+    </div>
+  );
+}
+
+function StatPill({ label, value, color }) {
+  return (
+    <div className="flex-1 rounded-2xl bg-white shadow-sm px-3 py-2.5 text-center border border-gray-100">
+      <p className="text-lg font-bold" style={{ color }}>{value}</p>
+      <p className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">{label}</p>
     </div>
   );
 }

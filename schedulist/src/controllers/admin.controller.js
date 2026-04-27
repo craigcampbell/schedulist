@@ -77,7 +77,7 @@ const getAllUsers = async (req, res) => {
       }
     }
     
-    const formattedUsers = users.map(user => ({
+    let formattedUsers = users.map(user => ({
       id: user.id,
       firstName: user.firstName,
       lastName: user.lastName,
@@ -88,9 +88,27 @@ const getAllUsers = async (req, res) => {
       roles: user.Roles ? user.Roles.map(role => role.name) : [],
       slackUserId: user.slackUserId,
       videoLink: user.videoLink,
+      npi: user.npi,
+      credentials: user.credentials,
+      providerLevel: user.providerLevel,
+      insurancePanels: user.insurancePanels || [],
+      certifications: user.certifications || [],
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     }));
+
+    // Client-side-style filtering for insurance/certification (JSON array fields can't be WHERE-filtered easily)
+    const { insurance, certification } = req.query;
+    if (insurance) {
+      formattedUsers = formattedUsers.filter(u =>
+        u.insurancePanels.some(p => p.toLowerCase().includes(insurance.toLowerCase()))
+      );
+    }
+    if (certification) {
+      formattedUsers = formattedUsers.filter(u =>
+        u.certifications.some(c => c.toLowerCase().includes(certification.toLowerCase()))
+      );
+    }
     
     return res.status(200).json(formattedUsers);
     
@@ -129,6 +147,11 @@ const getUserById = async (req, res) => {
       defaultLocationId: user.defaultLocationId,
       slackUserId: user.slackUserId,
       videoLink: user.videoLink,
+      npi: user.npi,
+      credentials: user.credentials,
+      providerLevel: user.providerLevel,
+      insurancePanels: user.insurancePanels || [],
+      certifications: user.certifications || [],
       createdAt: user.createdAt,
       updatedAt: user.updatedAt
     };
@@ -145,15 +168,15 @@ const getUserById = async (req, res) => {
  */
 const createUser = async (req, res) => {
   try {
-    const { firstName, lastName, email, password, phone, roles, locationIds, defaultLocationId, active, slackUserId, videoLink } = req.body;
-    
+    const { firstName, lastName, email, password, phone, roles, locationIds, defaultLocationId, active, slackUserId, videoLink, npi, credentials, providerLevel, insurancePanels, certifications } = req.body;
+
     // Check if user exists
     const userExists = await User.findOne({ where: { email } });
-    
+
     if (userExists) {
       return res.status(400).json({ message: 'Email already in use' });
     }
-    
+
     const user = await User.create({
       firstName,
       lastName,
@@ -164,7 +187,12 @@ const createUser = async (req, res) => {
       organizationId: req.user.organizationId,
       defaultLocationId,
       slackUserId: slackUserId || null,
-      videoLink: videoLink || null
+      videoLink: videoLink || null,
+      npi: npi || null,
+      credentials: credentials || null,
+      providerLevel: providerLevel || null,
+      insurancePanels: insurancePanels || null,
+      certifications: certifications || null,
     });
     
     // Assign roles
@@ -227,7 +255,7 @@ const createUser = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { firstName, lastName, email, phone, active, roles, locationIds, defaultLocationId, password, slackUserId, videoLink } = req.body;
+    const { firstName, lastName, email, phone, active, roles, locationIds, defaultLocationId, password, slackUserId, videoLink, npi, credentials, providerLevel, insurancePanels, certifications } = req.body;
     
     const user = await User.findByPk(id);
     
@@ -276,6 +304,11 @@ const updateUser = async (req, res) => {
       changes.push({ fieldName: 'videoLink', oldValue: user.videoLink, newValue: videoLink });
       user.videoLink = videoLink || null;
     }
+    if (npi !== undefined) user.npi = npi || null;
+    if (credentials !== undefined) user.credentials = credentials || null;
+    if (providerLevel !== undefined) user.providerLevel = providerLevel || null;
+    if (insurancePanels !== undefined) user.insurancePanels = insurancePanels || null;
+    if (certifications !== undefined) user.certifications = certifications || null;
     if (password) {
       // Log password change separately with special action
       await Audit.log({

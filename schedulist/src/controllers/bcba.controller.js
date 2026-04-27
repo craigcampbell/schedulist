@@ -447,11 +447,11 @@ const getAvailableTherapists = async (req, res) => {
         organizationId: user.organizationId,
         active: true
       },
-      attributes: ['id', 'firstName', 'lastName', 'email', 'active']
+      attributes: ['id', 'firstName', 'lastName', 'email', 'active', 'insurancePanels', 'certifications', 'credentials', 'providerLevel']
     });
-    
+
     return res.status(200).json(therapists);
-    
+
   } catch (error) {
     return res.status(500).json({ message: 'Error fetching available therapists', error: error.message });
   }
@@ -493,10 +493,10 @@ const getAvailableBCBAs = async (req, res) => {
         organizationId: user.organizationId,
         active: true
       },
-      attributes: ['id', 'firstName', 'lastName', 'email', 'active'],
+      attributes: ['id', 'firstName', 'lastName', 'email', 'active', 'insurancePanels', 'certifications', 'credentials', 'providerLevel'],
       order: [['lastName', 'ASC'], ['firstName', 'ASC']]
     });
-    
+
     // Format the response
     const formattedBcbas = bcbas.map(bcba => ({
       id: bcba.id,
@@ -505,7 +505,11 @@ const getAvailableBCBAs = async (req, res) => {
       email: bcba.email,
       active: bcba.active,
       name: `${bcba.firstName} ${bcba.lastName}`,
-      roles: ['bcba'] // Add the roles array for consistency
+      roles: ['bcba'],
+      insurancePanels: bcba.insurancePanels || [],
+      certifications: bcba.certifications || [],
+      credentials: bcba.credentials,
+      providerLevel: bcba.providerLevel,
     }));
     
     return res.status(200).json(formattedBcbas);
@@ -599,6 +603,7 @@ const getPatientsWithAssignments = async (req, res) => {
           lastName: patient.lastName,
           status: patient.status,
           color: patient.color,
+          insuranceProvider: patient.insuranceProvider,
           primaryBCBA: patient.PrimaryBCBA ? {
             id: patient.PrimaryBCBA.id,
             name: `${patient.PrimaryBCBA.firstName} ${patient.PrimaryBCBA.lastName}`

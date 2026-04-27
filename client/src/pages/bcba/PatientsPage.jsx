@@ -190,7 +190,6 @@ const PatientsPage = () => {
               <div className="flex items-start justify-between">
                 <div>
                   <h3 className="text-lg font-medium">{patient.firstName} {patient.lastName}</h3>
-                  <p className="text-sm text-gray-500">ID: {patient.id}</p>
                 </div>
                 <div 
                   className="w-6 h-6 rounded-full border border-gray-300"

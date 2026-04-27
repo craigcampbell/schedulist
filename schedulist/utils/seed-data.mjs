@@ -157,6 +157,62 @@ const TEST_USERS = {
   }
 };
 
+// Insurance panels a provider could be credentialed with
+const PROVIDER_INSURANCE_PANELS = [
+  'Aetna',
+  'Anthem',
+  'Blue Cross Blue Shield (BCBS)',
+  'Cigna',
+  'Humana',
+  'Kaiser Permanente',
+  'Magellan Health',
+  'Medicaid',
+  'Molina Healthcare',
+  'Optum',
+  'TriCare',
+  'UnitedHealthcare (UHC)',
+  'WellCare',
+  'Beacon Health Options / Carelon',
+  'Ambetter',
+];
+
+// ABA provider certifications
+const PROVIDER_CERTIFICATIONS = {
+  bcba: [
+    'BCBA – Board Certified Behavior Analyst',
+    'CPR/First Aid (AHA)',
+    'CPI – Crisis Prevention Institute (NVCI)',
+    'Safety Care (QBS)',
+    'VB-MAPP Trained Assessor',
+    'ABLLS-R Training',
+    'Mandated Reporter Training',
+    'HIPAA Certification',
+    'Positive Behavior Support (PBS)',
+  ],
+  therapist: [
+    'RBT – Registered Behavior Technician',
+    'CPR/First Aid (AHA)',
+    'CPR/First Aid (Red Cross)',
+    'CPI – Crisis Prevention Institute (NVCI)',
+    'Safety Care (QBS)',
+    'PROACT – Professional Management of Disruptive Behavior',
+    'MANDT System',
+    'Seizure First Aid',
+    'Mandated Reporter Training',
+    'HIPAA Certification',
+    'Bloodborne Pathogens',
+    'Discrete Trial Training (DTT)',
+    'Natural Environment Teaching (NET)',
+  ],
+};
+
+const PROVIDER_LEVELS = ['paraprofessional', 'bachelor', 'master', 'doctorate'];
+
+function randomSubset(arr, min = 1, max = 4) {
+  const count = faker.number.int({ min, max: Math.min(max, arr.length) });
+  return faker.helpers.arrayElements(arr, count);
+}
+
 // Initialize database with seed data
 const seedDatabase = async () => {
   try {
@@ -374,9 +430,11 @@ const seedDatabase = async () => {
     let allAppointments = [];
     const therapistSchedules = new Map(); // Track daily schedules for lunch rules
     
-    // Create a week's worth of appointments for each therapist
-    const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 }); // Start on Monday
-    
+    // Create 5 weeks of appointments: 2 past + current + 2 future
+    // This ensures there are always appointments visible regardless of what day it is
+    const thisMonday = startOfWeek(new Date(), { weekStartsOn: 1 });
+    const weekOffsets = [-2, -1, 0, 1, 2]; // weeks relative to current
+
     for (const therapist of activeTherapists) {
       // Get patients assigned to this therapist
       const therapistPatients = [];
@@ -386,24 +444,28 @@ const seedDatabase = async () => {
           therapistPatients.push(patient);
         }
       }
-      
+
       if (therapistPatients.length === 0) continue;
-      
-      // Create appointments for 5 weekdays
-      for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
-        const currentDay = addDays(weekStart, dayOffset);
-        const dailyAppointments = await createDailyScheduleForTherapist(
-          therapist,
-          therapistPatients,
-          orgLocations.active,
-          currentDay,
-          therapistSchedules
-        );
-        allAppointments.push(...dailyAppointments);
+
+      // Create appointments for Mon-Fri across all 5 weeks
+      for (const weekOffset of weekOffsets) {
+        const weekStart = addDays(thisMonday, weekOffset * 7);
+        for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
+          const currentDay = addDays(weekStart, dayOffset);
+          const dailyAppointments = await createDailyScheduleForTherapist(
+            therapist,
+            therapistPatients,
+            orgLocations.active,
+            currentDay,
+            therapistSchedules
+          );
+          allAppointments.push(...dailyAppointments);
+        }
       }
     }
-    
-    // Expiring organization (Hearts) - similar but less data
+
+    // Expiring organization (Hearts) - current week only
+    const heartsWeekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
     for (const therapist of expiringTherapists) {
       const therapistPatients = [];
       for (const patient of orgPatients.expiring) {
@@ -412,12 +474,11 @@ const seedDatabase = async () => {
           therapistPatients.push(patient);
         }
       }
-      
+
       if (therapistPatients.length === 0) continue;
-      
-      // Create appointments for current week
+
       for (let dayOffset = 0; dayOffset < 5; dayOffset++) {
-        const currentDay = addDays(weekStart, dayOffset);
+        const currentDay = addDays(heartsWeekStart, dayOffset);
         const dailyAppointments = await createDailyScheduleForTherapist(
           therapist,
           therapistPatients,
@@ -514,7 +575,34 @@ const seedDatabase = async () => {
 async function createUserWithOrg(userData, orgId, role) {
   const salt = await bcrypt.genSalt(10);
   const hashedPassword = await bcrypt.hash(userData ? userData.password : 'Password123', salt);
-  
+
+  const isBcba = role.name === 'bcba';
+  const isTherapist = role.name === 'therapist';
+  const isProvider = isBcba || isTherapist;
+
+  // Generate realistic provider-level credentialing data
+  let providerLevel = null;
+  let credentialsSuffix = null;
+  let npi = null;
+  let insurancePanels = null;
+  let certifications = null;
+
+  if (isBcba) {
+    providerLevel = faker.helpers.arrayElement(['master', 'master', 'doctorate']);
+    credentialsSuffix = providerLevel === 'doctorate' ? 'BCBA-D, LBA' : 'BCBA, LBA';
+    npi = faker.number.int({ min: 1000000000, max: 9999999999 }).toString();
+    // BCBAs are typically paneled with 2-6 insurances
+    insurancePanels = randomSubset(PROVIDER_INSURANCE_PANELS, 2, 6);
+    certifications = randomSubset(PROVIDER_CERTIFICATIONS.bcba, 3, 6);
+  } else if (isTherapist) {
+    providerLevel = faker.helpers.arrayElement(['paraprofessional', 'paraprofessional', 'bachelor']);
+    credentialsSuffix = providerLevel === 'bachelor' ? 'BA, RBT' : 'RBT';
+    npi = faker.helpers.maybe(() => faker.number.int({ min: 1000000000, max: 9999999999 }).toString(), { probability: 0.6 });
+    // Therapists may be paneled with 0-4 insurances
+    insurancePanels = randomSubset(PROVIDER_INSURANCE_PANELS, 0, 4);
+    certifications = randomSubset(PROVIDER_CERTIFICATIONS.therapist, 2, 5);
+  }
+
   const user = await db.User.create({
     firstName: userData ? userData.firstName : faker.person.firstName(),
     lastName: userData ? userData.lastName : faker.person.lastName(),
@@ -522,12 +610,19 @@ async function createUserWithOrg(userData, orgId, role) {
     password: hashedPassword,
     phone: faker.phone.number(),
     organizationId: orgId,
-    active: true
+    active: true,
+    ...(isProvider && {
+      providerLevel,
+      credentials: credentialsSuffix,
+      npi: npi || null,
+      insurancePanels: insurancePanels?.length ? insurancePanels : null,
+      certifications: certifications?.length ? certifications : null,
+    }),
   });
-  
+
   // Assign role
   await user.addRole(role);
-  
+
   return user;
 }
 
@@ -608,9 +703,13 @@ async function createDailyScheduleForTherapist(therapist, patients, locations, d
   let totalDailyHours = 0;
   const dailyAppointments = [];
   
-  // Start time at 8 AM
-  let currentTime = setMinutes(setHours(date, 8), 0);
-  const endOfDay = setHours(date, 17); // 5 PM end
+  // Start time at 8 AM Eastern (UTC-4 during EDT).
+  // Use explicit UTC hours so the seed produces correct local times regardless of
+  // where the script runs (local machine vs Docker/UTC container).
+  let currentTime = new Date(date);
+  currentTime.setUTCHours(12, 0, 0, 0); // 8 AM EDT = noon UTC
+  const endOfDay = new Date(date);
+  endOfDay.setUTCHours(21, 0, 0, 0);   // 5 PM EDT = 9 PM UTC
   
   // Shuffle patients for variety
   const shuffledPatients = [...patients].sort(() => 0.5 - Math.random());

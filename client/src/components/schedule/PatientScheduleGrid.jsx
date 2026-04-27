@@ -1,1329 +1,750 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { format, parseISO, isSameDay } from 'date-fns';
-import { 
-  AlertTriangle,
-  CheckCircle,
-  Users,
-  Eye,
-  EyeOff,
-  Clock,
-  User,
-  Calendar,
-  GripVertical,
-  UserPlus,
-  X,
-  Plus,
-  ChevronDown,
-  ChevronUp,
-  ChevronLeft,
-  ChevronRight,
-  Menu
-} from 'lucide-react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { format, isSameDay } from 'date-fns';
 import { cn } from '../../lib/utils';
+import { Undo2, Clock, AlertTriangle, Info } from 'lucide-react';
 import { Button } from '../ui/button';
-import { analyzeTherapistContinuity, calculateContinuityScore } from '../../utils/continuity-tracker';
-import { getAppointmentType, getAppointmentColors } from '../../utils/appointmentTypes';
-import { groupConsecutiveAppointments } from '../../utils/appointment-grouping';
-import { getLocationTimeSlots, getMostCommonLocation } from '../../utils/location-time-slots';
+import ConflictModal, { findConflicts } from './ConflictModal';
 
-// Coverage status colors
-const COVERAGE_COLORS = {
-  covered: 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200 border-green-300',
-  uncovered: 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200 border-red-400 animate-pulse',
-  gap: 'bg-orange-100 dark:bg-orange-900/30 text-orange-800 dark:text-orange-200 border-orange-300',
-  partial: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200 border-yellow-300',
-  none: 'bg-gray-100 dark:bg-gray-900/30 text-gray-800 dark:text-gray-200 border-gray-300'
+// ─── Palette (matches UnifiedScheduleView exactly) ────────────────────────────
+const PALETTE = [
+  { solid: '#3B82F6', light: '#EFF6FF', border: '#93C5FD', text: '#1D4ED8' },
+  { solid: '#10B981', light: '#ECFDF5', border: '#6EE7B7', text: '#065F46' },
+  { solid: '#F59E0B', light: '#FFFBEB', border: '#FCD34D', text: '#B45309' },
+  { solid: '#8B5CF6', light: '#F5F3FF', border: '#C4B5FD', text: '#5B21B6' },
+  { solid: '#EC4899', light: '#FDF2F8', border: '#F9A8D4', text: '#9D174D' },
+  { solid: '#14B8A6', light: '#F0FDFA', border: '#5EEAD4', text: '#0F766E' },
+  { solid: '#F97316', light: '#FFF7ED', border: '#FDBA74', text: '#C2410C' },
+  { solid: '#6366F1', light: '#EEF2FF', border: '#A5B4FC', text: '#3730A3' },
+];
+
+// ─── Service type colors ───────────────────────────────────────────────────────
+const SVC = {
+  direct:      { bg: '#EFF6FF', border: '#3B82F6', solid: '#3B82F6', text: '#1D4ED8', label: 'Dir' },
+  circle:      { bg: '#FDF2F8', border: '#EC4899', solid: '#EC4899', text: '#9D174D', label: 'Crc' },
+  indirect:    { bg: '#F3F4F6', border: '#9CA3AF', solid: '#6B7280', text: '#374151', label: 'Ind' },
+  supervision: { bg: '#F5F3FF', border: '#8B5CF6', solid: '#8B5CF6', text: '#5B21B6', label: 'Sup' },
+  lunch:       { bg: '#ECFDF5', border: '#10B981', solid: '#10B981', text: '#065F46', label: 'Lnc' },
+  cleaning:    { bg: '#FFF7ED', border: '#F97316', solid: '#F97316', text: '#C2410C', label: 'Cln' },
 };
 
+// ─── Layout constants (matches UnifiedScheduleView exactly) ───────────────────
+const PX_PER_MIN  = 2.2;
+const ROW_H       = 58;
+const LABEL_W     = 172;
+const SNAP        = 15;
+const CONNECT_GAP = 4;
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const toMins = (iso) => { const d = new Date(iso); return d.getHours() * 60 + d.getMinutes(); };
+const snap   = (m)   => Math.round(m / SNAP) * SNAP;
+
+function fmt12(iso) {
+  const d = new Date(iso);
+  const h = d.getHours(), m = d.getMinutes();
+  const p = h >= 12 ? 'PM' : 'AM';
+  const hd = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${hd}:${String(m).padStart(2, '0')} ${p}`;
+}
+
+function fmtDur(iso1, iso2) {
+  const mins = (new Date(iso2) - new Date(iso1)) / 60000;
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), r = mins % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
+
+function parseHHMM(str, fallback) {
+  if (!str) return fallback;
+  const [h, m] = str.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+
+function getPatientName(patient) {
+  if (!patient) return { first: '?', last: '?' };
+  const first = patient.decryptedFirstName || patient.firstName || '?';
+  const last  = patient.decryptedLastName  || patient.lastName  || '?';
+  return { first, last };
+}
+
+// ─── Component ─────────────────────────────────────────────────────────────────
 export default function PatientScheduleGrid({
-  patients = [],
-  appointments = [],
-  therapists = [],
+  patients         = [],
+  appointments     = [],
+  therapists       = [],
   selectedDate,
-  onAppointmentClick = () => {},
-  onGapClick = () => {},
+  locations        = [],
+  selectedLocation = null,
+  onAppointmentClick  = () => {},
+  onAppointmentUpdate = () => {},
+  onGapClick          = () => {},
   onTherapistAssignment = () => {},
-  onCellClick = () => {},
-  userRole = 'bcba',
+  userRole         = 'bcba',
+  canEdit          = false,
   showOnlyUncovered = false,
-  viewMode = 'grid', // 'grid' or 'columns'
-  location = null // Add location prop for location-specific time slots
 }) {
-  // Debug data received by component - ALWAYS LOG THIS
-  console.log('========================');
-  console.log('📋 PATIENT SCHEDULE DEBUG');
-  console.log('========================');
-  console.log('Patients:', patients.length);
-  console.log('Appointments:', appointments.length);
-  console.log('Selected Date:', selectedDate.toISOString().split('T')[0]);
-  
-  console.log('\n📝 ALL APPOINTMENTS:');
-  appointments.forEach((app, index) => {
-    console.log(`${index + 1}. ID: ${app.id}`);
-    console.log(`   - patientId: ${app.patientId}`);
-    console.log(`   - serviceType: "${app.serviceType}"`);
-    console.log(`   - startTime: ${app.startTime}`);
-    console.log(`   - status: ${app.status}`);
-  });
-  
-  console.log('\n👥 ALL PATIENTS:');
-  patients.forEach((patient, index) => {
-    console.log(`${index + 1}. ID: ${patient.id} - Name: ${patient.firstName} ${patient.lastName}`);
-  });
-  console.log('========================');
-  
-  const [expandedPatients, setExpandedPatients] = useState({});
-  const [selectedPatient, setSelectedPatient] = useState(null);
-  const [draggedTherapist, setDraggedTherapist] = useState(null);
-  const [dragOverSlot, setDragOverSlot] = useState(null);
-  const [isTherapistDrawerOpen, setIsTherapistDrawerOpen] = useState(false);
-  const [patientOrder, setPatientOrder] = useState([]);
-  const [draggedPatient, setDraggedPatient] = useState(null);
-  const [dragOverPatient, setDragOverPatient] = useState(null);
-  const [isReordering, setIsReordering] = useState(false);
-  const [reorderAnimation, setReorderAnimation] = useState(null);
-  const [layoutDensity, setLayoutDensity] = useState('normal'); // 'compact', 'normal', 'spacious'
-  const dragRef = useRef(null);
+  // ── Local optimistic appointment state ──
+  const [localAppts,    setLocalAppts]    = useState(appointments);
+  const [history,       setHistory]       = useState([]);  // [{id, startTime, endTime}]
+  const [drag,          setDrag]          = useState(null);
+  const [tooltip,       setTooltip]       = useState(null);
+  const [conflictState, setConflictState] = useState(null);
+  const trackRef = useRef(null);
 
-  // Filter appointments for today
-  const todaysAppointments = useMemo(() => {
-    return appointments.filter(appointment => 
-      isSameDay(parseISO(appointment.startTime), selectedDate)
-    );
-  }, [appointments, selectedDate]);
+  useEffect(() => setLocalAppts(appointments), [appointments]);
 
-  // Get location-specific time slots
-  const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
-    // Use provided location or find most common location from appointments
-    const targetLocation = location || getMostCommonLocation(todaysAppointments);
-    return getLocationTimeSlots(targetLocation, 'excel');
-  }, [location, todaysAppointments]);
+  // ── Today filter ──
+  const todayAppts = useMemo(() =>
+    localAppts.filter(a => a?.startTime && isSameDay(new Date(a.startTime), new Date(selectedDate))),
+    [localAppts, selectedDate]
+  );
 
-  // Format names based on user role
-  const formatPatientName = (patient) => {
-    if (!patient) return 'Unknown';
-    
-    // For all roles in schedule grid, show abbreviated names (first 2 + last 2 chars)
-    const firstTwo = patient.firstName?.substring(0, 2) || '--';
-    const lastTwo = patient.lastName?.substring(0, 2) || '--';
-    return `${firstTwo}${lastTwo}`;
-  };
+  // ── Operating hours from location ──
+  const { opStart, opEnd } = useMemo(() => {
+    const loc = locations.find(l => String(l.id) === String(selectedLocation)) || locations[0];
+    return {
+      opStart: parseHHMM(loc?.workingHoursStart, 7 * 60 + 30),
+      opEnd:   parseHHMM(loc?.workingHoursEnd,   17 * 60 + 30),
+    };
+  }, [locations, selectedLocation]);
 
-  // Format full patient name for hover/tooltip
-  const formatFullPatientName = (patient) => {
-    if (!patient) return 'Unknown';
-    return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
-  };
+  // ── Grid bounds: fixed to op hours, expand if appointments overflow ──
+  const { gsMin, geMin } = useMemo(() => {
+    if (!todayAppts.length) return { gsMin: opStart, geMin: opEnd };
+    const mins = todayAppts.flatMap(a => [toMins(a.startTime), toMins(a.endTime)]);
+    return {
+      gsMin: Math.min(opStart, Math.min(...mins) - 15),
+      geMin: Math.max(opEnd,   Math.max(...mins) + 15),
+    };
+  }, [todayAppts, opStart, opEnd]);
 
-  const formatTherapistName = (therapist) => {
-    if (!therapist) return 'Unassigned';
-    return `${therapist.firstName?.charAt(0) || ''}${therapist.lastName?.charAt(0) || ''}`;
-  };
+  const gridW = (geMin - gsMin) * PX_PER_MIN;
 
-  // Detect gaps in patient schedule
-  const detectScheduleGaps = (appointments) => {
-    if (appointments.length < 2) return [];
-    
-    const gaps = [];
-    const sortedApps = [...appointments].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-    
-    for (let i = 0; i < sortedApps.length - 1; i++) {
-      const currentEnd = new Date(sortedApps[i].endTime);
-      const nextStart = new Date(sortedApps[i + 1].startTime);
-      const gapMinutes = (nextStart - currentEnd) / (1000 * 60);
-      
-      // Flag gaps longer than 30 minutes during therapy hours
-      if (gapMinutes > 30 && gapMinutes < 180) { // 30 min to 3 hours
-        gaps.push({
-          startTime: currentEnd,
-          endTime: nextStart,
-          duration: gapMinutes,
-          type: 'schedule_gap'
-        });
+  // ── Assign patient colors (sorted by name for stability) ──
+  const colorOf = useMemo(() => {
+    const m = {};
+    [...patients]
+      .sort((a, b) => {
+        const na = getPatientName(a);
+        const nb = getPatientName(b);
+        return na.first.localeCompare(nb.first);
+      })
+      .forEach((p, i) => { m[p.id] = PALETTE[i % PALETTE.length]; });
+    return m;
+  }, [patients]);
+
+  // ── Build patient rows from today's appointments ──
+  const allRows = useMemo(() => {
+    // Index appointments by patientId
+    const map = {};
+    todayAppts.forEach(a => {
+      const pid = a.patientId || a.patient?.id;
+      if (!pid) return;
+      if (!map[pid]) {
+        // Prefer the full patient object from the patients prop
+        const fullPatient = patients.find(p => String(p.id) === String(pid));
+        const apptPatient = a.patient || {};
+        map[pid] = {
+          patient: fullPatient || apptPatient,
+          appts:   [],
+        };
       }
-    }
-    
-    return gaps;
-  };
-
-  // Group appointments by patient and analyze coverage
-  const patientScheduleData = useMemo(() => {
-    const scheduleData = {};
-    
-    // Initialize with all patients
-    patients.forEach(patient => {
-      scheduleData[patient.id] = {
-        patient,
-        appointments: [],
-        scheduledSlots: [],
-        uncoveredSlots: [],
-        gaps: [],
-        therapistCount: new Set(),
-        totalHours: 0,
-        coverageStatus: 'none'
-      };
+      map[pid].appts.push(a);
     });
-    
-    // Add appointments to patient schedules
-    const directAppointments = todaysAppointments.filter(app => app.patientId && app.serviceType === 'direct');
-    console.log('🎯 Direct appointments for patients:', {
-      totalTodaysAppointments: todaysAppointments.length,
-      directAppointments: directAppointments.length,
-      serviceTypes: todaysAppointments.map(app => ({ id: app.id, serviceType: app.serviceType, patientId: app.patientId })),
-      filteredOut: todaysAppointments.filter(app => !(app.patientId && app.serviceType === 'direct')).map(app => ({
-        id: app.id,
-        patientId: app.patientId,
-        serviceType: app.serviceType,
-        reason: !app.patientId ? 'No patientId' : app.serviceType !== 'direct' ? `serviceType is '${app.serviceType}' not 'direct'` : 'unknown'
-      })),
-      appointments: directAppointments.map(app => ({
-        id: app.id,
-        patientId: app.patientId,
-        serviceType: app.serviceType,
-        startTime: app.startTime
-      }))
+
+    return Object.values(map).map(({ patient, appts }) => {
+      const sorted = [...appts].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+      const color  = colorOf[patient.id] || PALETTE[0];
+
+      // Coverage stats: direct + circle count as "therapy hours"
+      const therapyAppts = sorted.filter(a => a.serviceType === 'direct' || a.serviceType === 'circle');
+      const hrs = therapyAppts.reduce((s, a) =>
+        s + (new Date(a.endTime) - new Date(a.startTime)) / 3.6e6, 0);
+      const target = ((patient.requiredWeeklyHours || patient.approvedHours || 0) / 5);
+      const pct    = target > 0 ? Math.min(100, (hrs / target) * 100) : null;
+
+      return { patient, appts: sorted, color, hrs, target, pct };
     });
-    
-    console.log('🔗 Processing direct appointments into patient schedules...');
-    directAppointments.forEach(appointment => {
-      console.log(`📝 Processing appointment ${appointment.id} for patient ${appointment.patientId}`);
-      if (scheduleData[appointment.patientId]) {
-        scheduleData[appointment.patientId].appointments.push(appointment);
-        
-        if (appointment.therapistId) {
-          scheduleData[appointment.patientId].therapistCount.add(appointment.therapistId);
-        }
-        
-        console.log(`✅ Added appointment to patient ${appointment.patientId} schedule. Total appointments: ${scheduleData[appointment.patientId].appointments.length}`);
-      } else {
-        console.warn(`⚠️ Patient ${appointment.patientId} not found in scheduleData keys:`, Object.keys(scheduleData));
-      }
-    });
-    
-    console.log('📊 Final patientScheduleData summary:', 
-      Object.entries(scheduleData).map(([patientId, data]) => ({
-        patientId,
-        patientName: `${data.patient.firstName} ${data.patient.lastName}`,
-        appointmentsCount: data.appointments.length
-      }))
-    );
-    
-    // Analyze each patient's schedule
-    Object.values(scheduleData).forEach(data => {
-      if (data.appointments.length === 0) {
-        // Patients with no appointments get 'none' status
-        data.coverageStatus = 'none';
-        data.totalHours = 0;
-        return;
-      }
-      
-      // Sort appointments by time
-      data.appointments.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-      
-      // Calculate coverage metrics
-      data.totalHours = data.appointments.reduce((total, app) => {
-        const duration = (new Date(app.endTime) - new Date(app.startTime)) / (1000 * 60 * 60);
-        return total + duration;
-      }, 0);
-      
-      // Determine coverage status
-      const uncoveredCount = data.appointments.filter(app => !app.therapistId).length;
-      const totalCount = data.appointments.length;
-      
-      if (uncoveredCount === 0) {
-        data.coverageStatus = 'covered';
-      } else if (uncoveredCount === totalCount) {
-        data.coverageStatus = 'uncovered';
-      } else {
-        data.coverageStatus = 'partial';
-      }
-      
-      // Detect gaps in coverage
-      data.gaps = detectScheduleGaps(data.appointments);
-      
-      // Analyze continuity
-      if (data.appointments.length > 0) {
-        try {
-          const continuityAnalysis = analyzeTherapistContinuity(data.patient.id, appointments, selectedDate, 'weekly');
-          data.continuityScore = calculateContinuityScore(continuityAnalysis);
-          data.continuityWarnings = continuityAnalysis.warnings;
-          data.therapistRotation = continuityAnalysis.uniqueTherapists.size;
-        } catch (error) {
-          console.warn('Error analyzing continuity:', error);
-          data.continuityScore = 0;
-          data.continuityWarnings = [];
-          data.therapistRotation = 0;
-        }
-      }
-    });
-    
-    return scheduleData;
-  }, [todaysAppointments, patients]);
+  }, [todayAppts, patients, colorOf]);
 
-  const parseTimeToMinutes = (timeStr) => {
-    if (!timeStr) return 0;
-    // Handle "7:30 AM" format (excel)
-    const ampmMatch = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-    if (ampmMatch) {
-      let hours = parseInt(ampmMatch[1], 10);
-      const minutes = parseInt(ampmMatch[2], 10);
-      const period = (ampmMatch[3] || '').toUpperCase();
-      if (period === 'PM' && hours !== 12) hours += 12;
-      if (period === 'AM' && hours === 12) hours = 0;
-      return hours * 60 + minutes;
+  // ── Apply showOnlyUncovered filter ──
+  const rows = useMemo(() => {
+    if (!showOnlyUncovered) return allRows;
+    return allRows.filter(r => r.pct === null || r.pct < 100);
+  }, [allRows, showOnlyUncovered]);
+
+  // ── Hour markers ──
+  const hourMarks = useMemo(() => {
+    const marks = [];
+    for (let h = Math.floor(gsMin / 60); h <= Math.ceil(geMin / 60); h++) {
+      const x = (h * 60 - gsMin) * PX_PER_MIN;
+      const p = h >= 12 ? 'PM' : 'AM';
+      const d = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      marks.push({ x, label: `${d}${p}`, isHalf: false, isNoon: h === 12 });
+      const xh = ((h + 0.5) * 60 - gsMin) * PX_PER_MIN;
+      if (xh > 0 && xh < gridW) marks.push({ x: xh, label: '', isHalf: true, isNoon: false });
     }
-    // Handle "07:30" format (24h)
-    const [hours, minutes] = timeStr.split(':').map(Number);
-    return (hours || 0) * 60 + (minutes || 0);
-  };
+    return marks;
+  }, [gsMin, geMin, gridW]);
 
-  // Check if appointment is in time slot
-  const isAppointmentInTimeSlot = (appointment, timeSlot) => {
-    let slotStartMinutes, slotEndMinutes;
+  // ── Appointment pixel layout ──
+  const layout = useCallback((a) => {
+    const s = toMins(a.startTime), e = toMins(a.endTime);
+    return {
+      x: (s - gsMin) * PX_PER_MIN,
+      w: Math.max((e - s) * PX_PER_MIN, 6),
+    };
+  }, [gsMin]);
 
-    if (timeSlot.includes('-')) {
-      // Range format: "7:30-8:00" or "7:30-8:00 AM"
-      const parts = timeSlot.split('-');
-      slotStartMinutes = parseTimeToMinutes(parts[0]);
-      slotEndMinutes = parseTimeToMinutes(parts[parts.length - 1]);
-    } else {
-      // Excel format: "7:30 AM" — slot spans 30 minutes from this time
-      slotStartMinutes = parseTimeToMinutes(timeSlot);
-      slotEndMinutes = slotStartMinutes + 30;
-    }
+  const isConsecutive = (a, b) =>
+    Math.abs(toMins(b.startTime) - toMins(a.endTime)) <= CONNECT_GAP;
 
-    const appStart = new Date(appointment.startTime);
-    const appEnd = new Date(appointment.endTime);
-
-    const appStartMinutes = appStart.getHours() * 60 + appStart.getMinutes();
-    const appEndMinutes = appEnd.getHours() * 60 + appEnd.getMinutes();
-
-    return (
-      (appStartMinutes >= slotStartMinutes && appStartMinutes < slotEndMinutes) ||
-      (appEndMinutes > slotStartMinutes && appEndMinutes <= slotEndMinutes) ||
-      (appStartMinutes <= slotStartMinutes && appEndMinutes >= slotEndMinutes)
-    );
-  };
-
-  // Get appointment for specific patient and time slot
-  const getPatientAppointmentForSlot = (patientId, timeSlot) => {
-    const patientData = patientScheduleData[patientId];
-    if (!patientData) return null;
-    
-    return patientData.appointments.find(app => isAppointmentInTimeSlot(app, timeSlot));
-  };
-
-  // Filter patients based on coverage filter
-  const filteredPatients = useMemo(() => {
-    return patients.filter(patient => {
-      const data = patientScheduleData[patient.id];
-      if (!data) return false;
-      
-      // For columns view, show all patients even if they have no appointments
-      if (viewMode === 'columns') {
-        if (showOnlyUncovered) {
-          return data.appointments.length === 0 || data.coverageStatus === 'uncovered' || data.coverageStatus === 'partial';
-        }
-        return true;
-      }
-      
-      // For other views, only show patients with appointments
-      if (data.appointments.length === 0) return false;
-      
-      if (showOnlyUncovered) {
-        return data.coverageStatus === 'uncovered' || data.coverageStatus === 'partial';
-      }
-      
-      return true;
-    });
-  }, [patients, patientScheduleData, showOnlyUncovered, viewMode]);
-
-  // Load patient order from localStorage on mount
-  useEffect(() => {
-    const savedOrder = localStorage.getItem('patientColumnOrder');
-    if (savedOrder) {
-      try {
-        const parsedOrder = JSON.parse(savedOrder);
-        setPatientOrder(parsedOrder);
-      } catch (error) {
-        console.warn('Failed to parse saved patient order:', error);
-      }
-    }
-    
-    // Load layout density preference
-    const savedDensity = localStorage.getItem('patientLayoutDensity');
-    if (savedDensity && ['compact', 'normal', 'spacious'].includes(savedDensity)) {
-      setLayoutDensity(savedDensity);
-    }
-  }, []);
-
-  // Save patient order to localStorage whenever it changes
-  useEffect(() => {
-    if (patientOrder.length > 0) {
-      localStorage.setItem('patientColumnOrder', JSON.stringify(patientOrder));
-    }
-  }, [patientOrder]);
-
-  // Save layout density to localStorage whenever it changes
-  useEffect(() => {
-    localStorage.setItem('patientLayoutDensity', layoutDensity);
-  }, [layoutDensity]);
-
-  // Initialize patient order when filtered patients change
-  useEffect(() => {
-    if (patientOrder.length === 0 && filteredPatients.length > 0) {
-      const initialOrder = filteredPatients.map(p => p.id);
-      setPatientOrder(initialOrder);
-    } else if (patientOrder.length > 0 && filteredPatients.length > 0) {
-      // Check for new patients not in the order
-      const newPatients = filteredPatients.filter(p => !patientOrder.includes(p.id));
-      if (newPatients.length > 0) {
-        setPatientOrder(prev => [...prev, ...newPatients.map(p => p.id)]);
-      }
-    }
-  }, [filteredPatients]);
-
-  // Order patients based on saved order
-  const orderedPatients = useMemo(() => {
-    if (patientOrder.length === 0) {
-      return filteredPatients;
-    }
-    
-    // Sort filtered patients by the custom order
-    const ordered = patientOrder
-      .map(id => filteredPatients.find(p => p.id === id))
-      .filter(Boolean);
-    
-    // Add any new patients not in the order
-    const newPatients = filteredPatients.filter(p => !patientOrder.includes(p.id));
-    
-    return [...ordered, ...newPatients];
-  }, [filteredPatients, patientOrder]);
-
-  const togglePatient = (patientId) => {
-    setExpandedPatients(prev => ({
-      ...prev,
-      [patientId]: !prev[patientId]
+  // ── Coverage stats header ──
+  const stats = useMemo(() => {
+    const data = allRows.map(({ patient, hrs, target, pct, color }) => ({
+      patient, hrs, target, pct, color,
     }));
-  };
+    const totalHrs    = data.reduce((s, d) => s + d.hrs, 0);
+    const totalTarget = data.reduce((s, d) => s + d.target, 0);
+    const overall     = totalTarget > 0 ? Math.min(100, (totalHrs / totalTarget) * 100) : null;
+    return { data, totalHrs, totalTarget, overall };
+  }, [allRows]);
 
-  // Layout density controls
-  const setCompactLayout = () => setLayoutDensity('compact');
-  const setNormalLayout = () => setLayoutDensity('normal');
-  const setSpaciousLayout = () => setLayoutDensity('spacious');
+  // ── Drag handlers ──
+  const onMouseMove = useCallback((e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.mouseX0;
+    const dm = snap(dx / PX_PER_MIN);
 
-  // Get layout dimensions based on density
-  const getLayoutDimensions = () => {
-    switch (layoutDensity) {
-      case 'compact':
-        return {
-          cardWidth: 240,
-          cardMinWidth: 220,
-          gap: 'gap-2',
-          padding: 'p-2',
-          textSize: 'text-sm',
-          headerPadding: 'p-3'
-        };
-      case 'spacious':
-        return {
-          cardWidth: 400,
-          cardMinWidth: 360,
-          gap: 'gap-6',
-          padding: 'p-4',
-          textSize: 'text-base',
-          headerPadding: 'p-5'
-        };
-      default: // normal
-        return {
-          cardWidth: 320,
-          cardMinWidth: 280,
-          gap: 'gap-4',
-          padding: 'p-3',
-          textSize: 'text-sm',
-          headerPadding: 'p-4'
-        };
-    }
-  };
+    setLocalAppts(prev => prev.map(a => {
+      if (a.id !== drag.id) return a;
+      const base = new Date(a.startTime);
 
-  // Patient drag and drop handlers
-  const handlePatientDragStart = (e, patient) => {
-    setDraggedPatient(patient);
-    setIsReordering(true);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', patient.id);
-    
-    // Find the patient card container (parent of the drag handle)
-    const patientCard = e.currentTarget.closest('[data-patient-card]');
-    if (patientCard) {
-      // Create a custom drag image of the entire card
-      const rect = patientCard.getBoundingClientRect();
-      const dragImage = patientCard.cloneNode(true);
-      dragImage.style.position = 'absolute';
-      dragImage.style.top = '-9999px';
-      dragImage.style.width = rect.width + 'px';
-      dragImage.style.height = rect.height + 'px';
-      dragImage.style.opacity = '0.8';
-      dragImage.style.transform = 'rotate(2deg)';
-      dragImage.style.boxShadow = '0 20px 40px rgba(0,0,0,0.3)';
-      document.body.appendChild(dragImage);
-      
-      e.dataTransfer.setDragImage(dragImage, rect.width / 2, 20);
-      
-      // Clean up the drag image after a short delay
-      setTimeout(() => {
-        document.body.removeChild(dragImage);
-      }, 100);
-    }
-  };
+      if (drag.type === 'move') {
+        const ns = Math.max(gsMin, drag.s0 + dm);
+        const dur = drag.e0 - drag.s0;
+        const ne  = ns + dur;
+        const d1  = new Date(base); d1.setHours(Math.floor(ns / 60), ns % 60, 0, 0);
+        const d2  = new Date(base); d2.setHours(Math.floor(ne / 60), ne % 60, 0, 0);
+        setTooltip({ text: `${fmt12(d1.toISOString())} – ${fmt12(d2.toISOString())}` });
+        return { ...a, startTime: d1.toISOString(), endTime: d2.toISOString() };
+      } else {
+        const ne = Math.max(drag.s0 + SNAP, drag.e0 + dm);
+        const d  = new Date(base); d.setHours(Math.floor(ne / 60), ne % 60, 0, 0);
+        setTooltip({ text: `End: ${fmt12(d.toISOString())} (${fmtDur(a.startTime, d.toISOString())})` });
+        return { ...a, endTime: d.toISOString() };
+      }
+    }));
+  }, [drag, gsMin]);
 
-  const handlePatientDragEnd = (e) => {
-    setDraggedPatient(null);
-    setDragOverPatient(null);
-    
-    // Clear reordering state after animation completes
-    setTimeout(() => {
-      setIsReordering(false);
-      setReorderAnimation(null);
-    }, 500);
-  };
-
-  const handlePatientDragOver = (e, targetPatientId) => {
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'move';
-    
-    if (draggedPatient && draggedPatient.id !== targetPatientId) {
-      setDragOverPatient(targetPatientId);
-    }
-  };
-
-  const handlePatientDragLeave = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    // Only clear if we're actually leaving the target element
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX;
-    const y = e.clientY;
-    
-    if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) {
-      setDragOverPatient(null);
-    }
-  };
-
-  const handlePatientDrop = (e, targetPatientId) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    if (draggedPatient && draggedPatient.id !== targetPatientId) {
-      const currentOrder = [...patientOrder];
-      const draggedIndex = currentOrder.indexOf(draggedPatient.id);
-      const targetIndex = currentOrder.indexOf(targetPatientId);
-      
-      if (draggedIndex !== -1 && targetIndex !== -1) {
-        // Set animation state before reordering
-        setReorderAnimation({
-          draggedId: draggedPatient.id,
-          targetId: targetPatientId,
-          direction: draggedIndex < targetIndex ? 'right' : 'left'
+  const onMouseUp = useCallback(() => {
+    if (!drag) return;
+    const updated = localAppts.find(a => a.id === drag.id);
+    if (updated && (updated.startTime !== drag.origStart || updated.endTime !== drag.origEnd)) {
+      const conflicts = findConflicts(updated, localAppts);
+      if (conflicts.length > 0) {
+        setLocalAppts(prev => prev.map(a =>
+          a.id === drag.id ? { ...a, startTime: drag.origStart, endTime: drag.origEnd } : a
+        ));
+        setConflictState({
+          movedAppt: updated,
+          conflicts,
+          originalTimes: { startTime: drag.origStart, endTime: drag.origEnd },
         });
-        
-        // Animate the reorder with more dramatic effect
-        setTimeout(() => {
-          // Remove dragged item and insert at target position
-          currentOrder.splice(draggedIndex, 1);
-          currentOrder.splice(targetIndex, 0, draggedPatient.id);
-          setPatientOrder(currentOrder);
-          
-          // Flash success animation
-          setTimeout(() => {
-            setReorderAnimation({
-              ...reorderAnimation,
-              success: true
-            });
-            
-            // Clear success flash after brief moment
-            setTimeout(() => {
-              setReorderAnimation(null);
-            }, 800);
-          }, 200);
-        }, 300);
+      } else {
+        setHistory(h => [...h.slice(-19), { id: drag.id, startTime: drag.origStart, endTime: drag.origEnd }]);
+        onAppointmentUpdate(updated);
       }
     }
-    setDraggedPatient(null);
-    setDragOverPatient(null);
-  };
+    setDrag(null);
+    setTooltip(null);
+  }, [drag, localAppts, onAppointmentUpdate]);
 
-  // Drag and drop handlers
-  const handleDragStart = (e, therapist) => {
-    setDraggedTherapist(therapist);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', therapist.id);
-  };
+  useEffect(() => {
+    if (!drag) return;
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup',  onMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup',  onMouseUp);
+    };
+  }, [drag, onMouseMove, onMouseUp]);
 
-  const handleDragOver = (e, patientId, timeSlot) => {
+  const beginDrag = (e, appt, type) => {
+    if (!canEdit) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    setDragOverSlot({ patientId, timeSlot });
-  };
-
-  const handleDragLeave = (e) => {
-    if (!e.currentTarget.contains(e.relatedTarget)) {
-      setDragOverSlot(null);
-    }
-  };
-
-  const handleDrop = (e, patientId, timeSlot) => {
-    e.preventDefault();
-    if (draggedTherapist) {
-      const appointment = getPatientAppointmentForSlot(patientId, timeSlot);
-      if (appointment) {
-        onTherapistAssignment({
-          appointmentId: appointment.id,
-          therapistId: draggedTherapist.id,
-          patientId,
-          timeSlot
-        });
-      }
-    }
-    setDraggedTherapist(null);
-    setDragOverSlot(null);
-  };
-
-  const handleUnassignTherapist = (appointment) => {
-    onTherapistAssignment({
-      appointmentId: appointment.id,
-      therapistId: null,
-      patientId: appointment.patientId,
-      action: 'unassign'
+    e.stopPropagation();
+    setDrag({
+      type,
+      id:        appt.id,
+      mouseX0:   e.clientX,
+      s0:        toMins(appt.startTime),
+      e0:        toMins(appt.endTime),
+      origStart: appt.startTime,
+      origEnd:   appt.endTime,
     });
   };
 
-  if (orderedPatients.length === 0) {
-    console.log('PatientScheduleGrid: No filtered patients', {
-      totalPatients: patients.length,
-      viewMode,
-      showOnlyUncovered,
-      patientScheduleData: Object.keys(patientScheduleData)
-    });
+  // ── Undo ──
+  const undo = () => {
+    if (!history.length) return;
+    const last = history[history.length - 1];
+    setHistory(h => h.slice(0, -1));
+    const full = localAppts.find(a => a.id === last.id);
+    setLocalAppts(prev => prev.map(a =>
+      a.id === last.id ? { ...a, startTime: last.startTime, endTime: last.endTime } : a
+    ));
+    if (full) onAppointmentUpdate({ ...full, startTime: last.startTime, endTime: last.endTime });
+  };
+
+  // ─── Empty state ─────────────────────────────────────────────────────────────
+  if (!todayAppts.length) {
     return (
-      <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-        <Calendar className="h-12 w-12 mx-auto mb-4 opacity-30" />
-        <p className="text-lg font-medium mb-2">
-          {showOnlyUncovered ? 'All Patients Covered' : 'No Patient Schedules'}
-        </p>
-        <p>
-          {showOnlyUncovered 
-            ? 'All patients have therapist coverage for their scheduled sessions.'
-            : viewMode === 'columns' 
-              ? `No patients found. Total available: ${patients.length}`
-              : 'No patients have appointments scheduled for this date.'
-          }
+      <div className="flex flex-col items-center justify-center py-20 text-gray-400 dark:text-gray-500">
+        <Clock className="h-12 w-12 mb-4 opacity-30" />
+        <p className="text-lg font-medium">
+          No appointments scheduled for {format(new Date(selectedDate), 'EEEE, MMMM d')}
         </p>
       </div>
     );
   }
 
-  // Daily view - show single day schedule
-  if (viewMode === 'daily') {
-    return (
-      <div className="flex flex-col h-full">
-        {/* Available Therapists Panel */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4 mb-4">
-          <h3 className="text-lg font-semibold mb-3 text-gray-900 dark:text-white">Available Therapists</h3>
-          <div className="flex flex-wrap gap-2">
-            {therapists.map(therapist => (
-              <div
-                key={therapist.id}
-                draggable
-                onDragStart={(e) => handleDragStart(e, therapist)}
-                className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200 rounded-lg border border-blue-200 dark:border-blue-700 cursor-move hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
-              >
-                <GripVertical className="h-4 w-4" />
-                <User className="h-4 w-4" />
-                <span className="text-sm font-medium">
-                  {therapist.firstName} {therapist.lastName}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+  // ─── Render ──────────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-4 select-none">
 
-        {/* Daily Schedule Grid */}
-        <div className="flex-1 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
-          {/* Header */}
-          <div className="bg-gray-50 dark:bg-gray-800/50 p-4 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-              {format(new Date(selectedDate), 'EEEE, MMMM d, yyyy')}
-            </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              {filteredPatients.length} patients with scheduled sessions
+      {/* ── Today's Coverage header ──────────────────────────────────────── */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4">
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white text-base">
+              Today's Coverage
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+              {stats.data.length} patient{stats.data.length !== 1 ? 's' : ''} · {stats.totalHrs.toFixed(1)}h of {stats.totalTarget.toFixed(1)}h daily target
             </p>
           </div>
-
-          {/* Time slots and appointments */}
-          <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
-            <div className="min-w-max">
-              <div className="grid grid-cols-[100px_1fr] gap-0">
-                {/* Time column header */}
-                <div className="p-3 border-r border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 font-semibold sticky top-0 z-10">
-                  Time
-                </div>
-                <div className="p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 font-semibold sticky top-0 z-10">
-                  Appointments & Assignments
-                </div>
-                
-                {/* Time slot rows */}
-                {TIME_SLOTS.map((timeSlot, index) => {
-                  // Get all appointments for this time slot
-                  const timeSlotAppointments = filteredPatients.flatMap(patient => {
-                    const appointment = getPatientAppointmentForSlot(patient.id, timeSlot);
-                    return appointment ? [{ ...appointment, patient }] : [];
-                  });
-                  
-                  return (
-                    <React.Fragment key={timeSlot}>
-                      <div className={cn(
-                        "p-3 border-r border-b border-gray-100 dark:border-gray-700/50 text-sm font-medium",
-                        index % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50/30 dark:bg-gray-800/50"
-                      )}>
-                        {timeSlot}
-                      </div>
-                      
-                      <div className={cn(
-                        "p-3 border-b border-gray-100 dark:border-gray-700/50 min-h-[60px]",
-                        index % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50/30 dark:bg-gray-800/50"
-                      )}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = 'move';
-                      }}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        // Handle drop on time slot - could create new appointment
-                        if (draggedTherapist) {
-                          console.log('Dropped therapist on time slot:', timeSlot, draggedTherapist);
-                        }
-                        setDraggedTherapist(null);
-                      }}
-                      >
-                        {timeSlotAppointments.length > 0 ? (
-                          <div className="flex flex-wrap gap-2">
-                            {timeSlotAppointments.map(appointment => (
-                              <div
-                                key={appointment.id}
-                                className={cn(
-                                  "flex items-center justify-between px-3 py-2 rounded-lg border text-sm cursor-pointer hover:shadow-sm transition-all",
-                                  appointment.therapistId ? COVERAGE_COLORS.covered : COVERAGE_COLORS.uncovered
-                                )}
-                                onClick={() => onAppointmentClick(appointment)}
-                                onDragOver={(e) => handleDragOver(e, appointment.patient.id, timeSlot)}
-                                onDragLeave={handleDragLeave}
-                                onDrop={(e) => handleDrop(e, appointment.patient.id, timeSlot)}
-                              >
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium" title={formatFullPatientName(appointment.patient)}>
-                                    {formatPatientName(appointment.patient)}
-                                  </span>
-                                  <span className="text-xs text-gray-500">
-                                    ({appointment.serviceType || 'direct'})
-                                  </span>
-                                </div>
-                                
-                                <div className="flex items-center gap-2">
-                                  {appointment.therapistId ? (
-                                    <div className="flex items-center gap-1">
-                                      <User className="h-3 w-3" />
-                                      <span className="text-xs">{formatTherapistName(appointment.therapist)}</span>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleUnassignTherapist(appointment);
-                                        }}
-                                        className="hover:bg-red-100 dark:hover:bg-red-900/30 p-1 rounded transition-colors"
-                                        title="Unassign therapist"
-                                      >
-                                        <X className="h-3 w-3" />
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <div className="flex items-center gap-1 text-red-600">
-                                      <AlertTriangle className="h-3 w-3" />
-                                      <span className="text-xs font-medium">NEEDS THERAPIST</span>
-                                    </div>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="text-gray-400 text-sm italic">No appointments</div>
-                        )}
-                      </div>
-                    </React.Fragment>
-                  );
-                })}
-              </div>
+          {stats.overall !== null && (
+            <div className="flex flex-col items-end">
+              <span className={cn(
+                "text-3xl font-bold tabular-nums",
+                stats.overall >= 85 ? "text-emerald-600" :
+                stats.overall >= 60 ? "text-amber-500"  : "text-red-500"
+              )}>
+                {Math.round(stats.overall)}%
+              </span>
+              <span className="text-xs text-gray-400">overall continuity</span>
             </div>
-          </div>
+          )}
         </div>
-      </div>
-    );
-  }
 
-  // Column view - show patients side by side
-  if (viewMode === 'columns') {
-    return (
-      <div className="flex flex-col h-full">
-        {/* Collapsible Therapist Drawer */}
-        <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 mb-4 transition-all duration-300">
-          {/* Drawer Header */}
-          <div 
-            className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-            onClick={() => setIsTherapistDrawerOpen(!isTherapistDrawerOpen)}
-          >
-            <div className="flex items-center gap-2">
-              <Menu className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-              <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
-                Available Therapists ({therapists.length})
-              </h3>
-            </div>
-            <div className="flex items-center gap-4">
-              {/* Layout Density Controls */}
-              <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
-                <button
-                  onClick={setCompactLayout}
-                  className={cn(
-                    "px-2 py-1 text-xs font-medium rounded transition-colors",
-                    layoutDensity === 'compact' 
-                      ? "bg-blue-500 text-white" 
-                      : "hover:bg-gray-200 dark:hover:bg-gray-600"
-                  )}
-                  title="Compact view - see more patients"
+        {/* Per-patient coverage bars */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
+          {stats.data.map(({ patient, hrs, target, pct, color }) => {
+            const { first, last } = getPatientName(patient);
+            return (
+              <div key={patient.id} className="flex items-center gap-2.5 min-w-0">
+                {/* Patient avatar */}
+                <div
+                  className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                  style={{ background: color.solid }}
                 >
-                  Compact
-                </button>
-                <button
-                  onClick={setNormalLayout}
-                  className={cn(
-                    "px-2 py-1 text-xs font-medium rounded transition-colors",
-                    layoutDensity === 'normal' 
-                      ? "bg-blue-500 text-white" 
-                      : "hover:bg-gray-200 dark:hover:bg-gray-600"
-                  )}
-                  title="Normal view"
-                >
-                  Normal
-                </button>
-                <button
-                  onClick={setSpaciousLayout}
-                  className={cn(
-                    "px-2 py-1 text-xs font-medium rounded transition-colors",
-                    layoutDensity === 'spacious' 
-                      ? "bg-blue-500 text-white" 
-                      : "hover:bg-gray-200 dark:hover:bg-gray-600"
-                  )}
-                  title="Spacious view - more detail"
-                >
-                  Spacious
-                </button>
-              </div>
-              
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500 dark:text-gray-400">
-                  {isTherapistDrawerOpen ? 'Click to collapse' : 'Click to expand'}
-                </span>
-                {isTherapistDrawerOpen ? (
-                  <ChevronUp className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-                ) : (
-                  <ChevronDown className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-                )}
-              </div>
-            </div>
-          </div>
-          
-          {/* Drawer Content */}
-          {isTherapistDrawerOpen && (
-            <div className="px-3 pb-3 border-t border-gray-200 dark:border-gray-700 pt-3">
-              <div className="flex flex-wrap gap-2">
-                {therapists.map(therapist => (
-                  <div
-                    key={therapist.id}
-                    draggable
-                    onDragStart={(e) => handleDragStart(e, therapist)}
-                    className="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200 rounded-lg border border-blue-200 dark:border-blue-700 cursor-move hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
-                  >
-                    <GripVertical className="h-4 w-4" />
-                    <User className="h-4 w-4" />
-                    <span className="text-sm font-medium">
-                      {therapist.firstName} {therapist.lastName}
+                  {first[0]}{last[0]}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-baseline mb-1">
+                    <span className="text-xs font-medium truncate text-gray-700 dark:text-gray-300">
+                      {first} {last[0]}.
+                    </span>
+                    <span className="text-xs text-gray-400 ml-1 flex-shrink-0">
+                      {hrs.toFixed(1)}h{target ? `/${target.toFixed(1)}h` : ''}
                     </span>
                   </div>
-                ))}
+                  <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                    {pct !== null ? (
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${pct}%`,
+                          background: pct >= 85 ? '#10B981' : pct >= 60 ? '#F59E0B' : color.solid,
+                        }}
+                      />
+                    ) : (
+                      <div
+                        className="h-full rounded-full w-full"
+                        style={{ background: color.solid, opacity: 0.3 }}
+                      />
+                    )}
+                  </div>
+                  {/* Uncovered warning */}
+                  {pct !== null && pct < 60 && (
+                    <div className="flex items-center gap-0.5 mt-0.5">
+                      <AlertTriangle className="h-2.5 w-2.5 text-red-400 flex-shrink-0" />
+                      <span className="text-[10px] text-red-500 truncate">
+                        {Math.round(pct)}% covered
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Patient Timeline section ─────────────────────────────────────── */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+
+        {/* Title + filter notice + undo */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white">
+              {format(new Date(selectedDate), 'EEEE, MMMM d')} — Patient Timeline
+            </h3>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+              {canEdit
+                ? 'Drag to reschedule · Drag right edge to resize'
+                : 'Click an appointment to view details'}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {showOnlyUncovered && (
+              <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-full px-2.5 py-1">
+                <Info className="h-3 w-3 flex-shrink-0" />
+                <span>Incomplete coverage only</span>
+              </div>
+            )}
+            {history.length > 0 && (
+              <Button variant="outline" size="sm" onClick={undo} className="flex items-center gap-1.5 text-xs">
+                <Undo2 className="h-3.5 w-3.5" />
+                Undo
+              </Button>
+            )}
+          </div>
         </div>
 
-        {/* Patient Columns */}
-        <div className="flex-1 overflow-hidden relative">
-          {/* Reordering notification */}
-          {isReordering && (
-            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-blue-500 text-white px-4 py-2 rounded-lg shadow-lg animate-pulse">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-white rounded-full animate-bounce"></div>
-                <span className="text-sm font-medium">Reordering patients...</span>
-              </div>
+        {/* No rows after filter */}
+        {rows.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-10 text-gray-400 dark:text-gray-500">
+            <p className="text-sm font-medium">All patients have 100% coverage today.</p>
+          </div>
+        )}
+
+        {/* Drag tooltip */}
+        {tooltip && (
+          <div className="sticky top-0 z-50 flex justify-center pointer-events-none">
+            <div className="bg-gray-900/90 text-white text-xs px-3 py-1.5 rounded-full shadow-lg mt-1">
+              {tooltip.text}
             </div>
-          )}
-          
-          {/* Success notification */}
-          {reorderAnimation?.success && (
-            <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-green-500 text-white px-4 py-2 rounded-lg shadow-lg animate-pulse">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-white rounded-full"></div>
-                <span className="text-sm font-medium">Order updated!</span>
+          </div>
+        )}
+
+        {rows.length > 0 && (
+          <div className="overflow-x-auto" ref={trackRef}>
+            <div className="relative" style={{ minWidth: LABEL_W + gridW + 32 }}>
+
+              {/* ── Time header ──────────────────────────────────────────── */}
+              <div className="flex sticky top-0 z-10 bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
+                {/* "Patient" label column header */}
+                <div
+                  style={{ width: LABEL_W, flexShrink: 0, height: 36 }}
+                  className="px-4 flex items-center text-xs font-medium text-gray-400 dark:text-gray-500 border-r border-gray-100 dark:border-gray-700"
+                >
+                  Patient
+                </div>
+                <div className="relative flex-1" style={{ height: 36 }}>
+                  {/* Out-of-hours shading in header */}
+                  {gsMin < opStart && (
+                    <div
+                      className="absolute top-0 bottom-0 pointer-events-none"
+                      style={{ left: 0, width: (opStart - gsMin) * PX_PER_MIN, background: 'rgba(0,0,0,0.04)' }}
+                    />
+                  )}
+                  {geMin > opEnd && (
+                    <div
+                      className="absolute top-0 bottom-0 pointer-events-none"
+                      style={{ left: (opEnd - gsMin) * PX_PER_MIN, right: 0, background: 'rgba(0,0,0,0.04)' }}
+                    />
+                  )}
+                  {hourMarks.map((m, i) => (
+                    <div
+                      key={i}
+                      className="absolute top-0 bottom-0 flex flex-col justify-center"
+                      style={{ left: m.x }}
+                    >
+                      {m.isHalf ? (
+                        <div className="w-px h-2 bg-gray-200 dark:bg-gray-600 -translate-x-px" />
+                      ) : (
+                        <span className={cn(
+                          "text-[11px] font-medium px-0.5 -translate-x-1/2",
+                          m.isNoon ? "text-blue-500 dark:text-blue-400" : "text-gray-400 dark:text-gray-500"
+                        )}>
+                          {m.label}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-          
-          <div className="h-full overflow-x-auto" style={{ overflowY: 'visible' }}>
-            <div 
-              className={cn(
-                `flex ${getLayoutDimensions().gap} min-w-max h-full transition-all duration-300`,
-                isReordering && "transform-gpu"
-              )}
-            >
-              {orderedPatients.map((patient, index) => {
-                const data = patientScheduleData[patient.id];
-                const isExpanded = expandedPatients[patient.id] !== false; // Default expanded
-                const isDragTarget = dragOverPatient === patient.id;
-                const isBeingDragged = draggedPatient?.id === patient.id;
-                const isAnimating = reorderAnimation && (
-                  reorderAnimation.draggedId === patient.id || 
-                  reorderAnimation.targetId === patient.id
-                );
-                const isSuccessFlash = reorderAnimation?.success && isAnimating;
-                const dimensions = getLayoutDimensions();
-                
+
+              {/* ── Patient rows ─────────────────────────────────────────── */}
+              {rows.map(({ patient, appts, color, hrs, target, pct }, rowIdx) => {
+                const { first, last } = getPatientName(patient);
                 return (
                   <div
                     key={patient.id}
-                    data-patient-card
-                    onDragOver={(e) => handlePatientDragOver(e, patient.id)}
-                    onDragLeave={handlePatientDragLeave}
-                    onDrop={(e) => handlePatientDrop(e, patient.id)}
-                    style={{
-                      transitionDelay: isReordering ? `${index * 80}ms` : '0ms',
-                      width: `${dimensions.cardWidth}px`,
-                      minWidth: `${dimensions.cardMinWidth}px`,
-                      borderColor: patient.color || '#6B7280'
-                    }}
                     className={cn(
-                      "flex-shrink-0 bg-white dark:bg-gray-800 rounded-lg border-2 shadow-sm h-full flex flex-col transition-all duration-500 ease-in-out",
-                      isDragTarget && "transform scale-110 shadow-2xl border-blue-500 dark:border-blue-400 ring-4 ring-blue-300 dark:ring-blue-600 bg-blue-50 dark:bg-blue-900/20",
-                      isBeingDragged && "opacity-30 shadow-2xl z-50 transform scale-95",
-                      isAnimating && !isSuccessFlash && "transform translateX(20px) scale(105)",
-                      isSuccessFlash && "transform scale-110 ring-4 ring-green-400 dark:ring-green-500 shadow-2xl border-green-500 dark:border-green-400 bg-green-50 dark:bg-green-900/20",
-                      isReordering && "transition-all duration-500 ease-out"
+                      "flex border-b border-gray-50 dark:border-gray-700/40",
+                      rowIdx % 2 === 1 && "bg-gray-50/40 dark:bg-gray-800/60"
                     )}
+                    style={{ height: ROW_H }}
                   >
-                    {/* Patient Accordion Header */}
-                    <div 
-                      className={cn(
-                        `${dimensions.headerPadding} transition-colors relative cursor-pointer`,
-                        data.coverageStatus === 'covered' && "bg-green-50 dark:bg-green-900/20",
-                        data.coverageStatus === 'partial' && "bg-yellow-50 dark:bg-yellow-900/20", 
-                        data.coverageStatus === 'uncovered' && "bg-red-50 dark:bg-red-900/20",
-                        data.coverageStatus === 'none' && "bg-gray-50 dark:bg-gray-900/20",
-                        "hover:opacity-90"
-                      )}
-                      onClick={() => togglePatient(patient.id)}
+                    {/* ── Patient label ── */}
+                    <div
+                      style={{ width: LABEL_W, flexShrink: 0 }}
+                      className="px-3 flex items-center gap-2.5 border-r border-gray-100 dark:border-gray-700 shrink-0"
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          {/* Dedicated drag handle */}
-                          <div
-                            draggable
-                            onDragStart={(e) => {
-                              e.stopPropagation();
-                              handlePatientDragStart(e, patient);
-                            }}
-                            onDragEnd={handlePatientDragEnd}
-                            className={cn(
-                              "cursor-move hover:bg-gray-200 dark:hover:bg-gray-600 p-1 rounded transition-all duration-200",
-                              "hover:scale-110 active:scale-95",
-                              isBeingDragged && "bg-blue-100 dark:bg-blue-900/30"
-                            )}
-                            title="Drag to reorder patients"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <GripVertical className={cn(
-                              "h-4 w-4 transition-colors duration-200",
-                              isBeingDragged ? "text-blue-600 dark:text-blue-400" : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                            )} />
-                          </div>
-                          <div 
-                            className="w-3 h-3 rounded-full border-2 border-gray-300"
-                            style={{ backgroundColor: patient.color || '#6B7280' }}
-                            title="Patient color"
-                          ></div>
-                          <div>
-                            <h3 
-                              className={cn(
-                                "font-bold text-gray-900 dark:text-white",
-                                layoutDensity === 'compact' ? "text-sm" : layoutDensity === 'spacious' ? "text-xl" : "text-lg"
-                              )}
-                              title={formatFullPatientName(patient)}
-                            >
-                              {layoutDensity === 'compact' ? formatPatientName(patient) : formatFullPatientName(patient)}
-                            </h3>
-                            {/* Patient Summary - Always visible */}
-                            <div className={cn(
-                              "mt-1 text-gray-600 dark:text-gray-400",
-                              layoutDensity === 'compact' ? "text-xs" : "text-sm"
-                            )}>
-                              <div className={cn(
-                                "flex",
-                                layoutDensity === 'compact' ? "gap-2 flex-col" : "gap-4"
-                              )}>
-                                <span>{data.totalHours.toFixed(1)}h</span>
-                                <span>{data.appointments.length} sessions</span>
-                                {layoutDensity !== 'compact' && (
-                                  <span>Required: {patient.requiredWeeklyHours || 0}h/week</span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
+                      {/* Avatar circle */}
+                      <div
+                        className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-bold text-white shadow-sm"
+                        style={{ background: color.solid }}
+                      >
+                        {first[0]}{last[0]}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate leading-tight">
+                          {first} {last}
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-500 dark:text-gray-400">
-                            {isExpanded ? 'Click to collapse' : 'Click to expand'}
-                          </span>
-                          {isExpanded ? (
-                            <ChevronUp className="h-4 w-4 text-gray-600 dark:text-gray-400" />
-                          ) : (
-                            <ChevronDown className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                        <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
+                          {appts.length} session{appts.length !== 1 ? 's' : ''}
+                          {target > 0 && (
+                            <span className={cn(
+                              "ml-1",
+                              pct !== null && pct < 60 ? "text-red-400" :
+                              pct !== null && pct < 85 ? "text-amber-400" : "text-emerald-500"
+                            )}>
+                              · {hrs.toFixed(1)}/{target.toFixed(1)}h
+                            </span>
                           )}
                         </div>
                       </div>
                     </div>
 
-                    {/* Time Slots - Only show when expanded */}
-                    {isExpanded && (
-                      <div className="flex-1 overflow-y-auto border-t border-gray-200 dark:border-gray-700">
-                        {TIME_SLOTS.map((timeSlot, index) => {
-                        const appointment = getPatientAppointmentForSlot(patient.id, timeSlot);
-                        const isDropTarget = dragOverSlot?.patientId === patient.id && dragOverSlot?.timeSlot === timeSlot;
-                        
+                    {/* ── Timeline track ── */}
+                    <div className="relative flex-1" style={{ height: ROW_H }}>
+
+                      {/* Out-of-hours hatching (before operating window) */}
+                      {gsMin < opStart && (
+                        <div
+                          className="absolute top-0 bottom-0 pointer-events-none"
+                          style={{
+                            left: 0,
+                            width: (opStart - gsMin) * PX_PER_MIN,
+                            background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
+                            backgroundColor: 'rgba(0,0,0,0.04)',
+                          }}
+                        />
+                      )}
+                      {/* Out-of-hours hatching (after operating window) */}
+                      {geMin > opEnd && (
+                        <div
+                          className="absolute top-0 bottom-0 pointer-events-none"
+                          style={{
+                            left: (opEnd - gsMin) * PX_PER_MIN,
+                            right: 0,
+                            background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
+                            backgroundColor: 'rgba(0,0,0,0.04)',
+                          }}
+                        />
+                      )}
+
+                      {/* Hour grid lines */}
+                      {hourMarks.filter(m => !m.isHalf).map((m, i) => (
+                        <div
+                          key={i}
+                          className="absolute top-0 bottom-0 border-l border-gray-100 dark:border-gray-700/40"
+                          style={{ left: m.x }}
+                        />
+                      ))}
+
+                      {/* Subway track line */}
+                      <div
+                        className="absolute top-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+                        style={{
+                          left: 0, right: 0, height: 3,
+                          background: color.border,
+                          opacity: 0.35,
+                        }}
+                      />
+
+                      {/* Appointment blocks */}
+                      {appts.map((appt, idx) => {
+                        const { x, w } = layout(appt);
+                        const prev = appts[idx - 1];
+                        const next = appts[idx + 1];
+                        const fromPrev   = prev && isConsecutive(prev, appt);
+                        const toNext     = next && isConsecutive(appt, next);
+                        const isDragging = drag?.id === appt.id;
+
+                        // Block color: service-type override or patient palette
+                        const svc = SVC[appt.serviceType];
+                        const blockColor = svc
+                          ? { light: svc.bg, border: svc.border, solid: svc.solid, text: svc.text }
+                          : { light: color.light, border: color.border, solid: color.solid, text: color.text };
+
+                        // Therapist initials
+                        const th = appt.therapist;
+                        const therapistInitials = th
+                          ? `${th.firstName?.[0] || ''}${th.lastName?.[0] || ''}`
+                          : '?';
+
+                        // Connected-capsule border radius
+                        const rOuter = '999px';
+                        const rInner = '5px';
+                        const borderRadius = [
+                          fromPrev ? rInner : rOuter,
+                          toNext   ? rInner : rOuter,
+                          toNext   ? rInner : rOuter,
+                          fromPrev ? rInner : rOuter,
+                        ].join(' ');
+
+                        const ml = fromPrev ? 1 : 0;
+                        const mr = toNext   ? 1 : 0;
+
                         return (
                           <div
-                            key={timeSlot}
+                            key={appt.id}
                             className={cn(
-                              `${dimensions.padding} border-b border-gray-100 dark:border-gray-700/50 transition-all`,
-                              layoutDensity === 'compact' ? "min-h-[45px]" : layoutDensity === 'spacious' ? "min-h-[80px]" : "min-h-[60px]",
-                              index % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50/30 dark:bg-gray-800/50",
-                              isDropTarget && "bg-blue-100 dark:bg-blue-900/30 border-blue-300 dark:border-blue-600"
+                              "absolute flex items-center overflow-visible",
+                              canEdit && (isDragging
+                                ? "cursor-grabbing z-30 shadow-xl"
+                                : "cursor-grab z-10 hover:z-20 hover:shadow-md"),
+                              !canEdit && "cursor-pointer z-10 hover:z-20 hover:shadow-md"
                             )}
-                            onDragOver={(e) => handleDragOver(e, patient.id, timeSlot)}
-                            onDragLeave={handleDragLeave}
-                            onDrop={(e) => handleDrop(e, patient.id, timeSlot)}
+                            style={{
+                              top: 9, bottom: 9,
+                              left: x + ml,
+                              width: Math.max(w - ml - mr, 6),
+                              background:   blockColor.light,
+                              border:       `2px solid ${blockColor.border}`,
+                              borderRadius,
+                              opacity: isDragging ? 0.75 : 1,
+                              boxShadow: isDragging
+                                ? `0 8px 24px ${blockColor.solid}40`
+                                : `0 1px 3px ${blockColor.solid}20`,
+                              transition: isDragging ? 'none' : 'box-shadow 0.15s, opacity 0.1s',
+                            }}
+                            onMouseDown={canEdit ? (e) => beginDrag(e, appt, 'move') : undefined}
+                            onClick={() => !drag && onAppointmentClick(appt)}
+                            title={`${fmt12(appt.startTime)} – ${fmt12(appt.endTime)} · ${appt.serviceType}${th ? ` · ${th.firstName} ${th.lastName}` : ' · unassigned'}`}
                           >
-                            <div className="flex justify-between items-center mb-1">
-                              <span className={cn(
-                                "font-medium text-gray-500 dark:text-gray-400",
-                                layoutDensity === 'compact' ? "text-[10px]" : "text-xs"
-                              )}>
-                                {layoutDensity === 'compact' ? timeSlot.replace('-', '-') : timeSlot}
-                              </span>
-                              {isDropTarget && (
-                                <span className={cn(
-                                  "text-blue-600 dark:text-blue-400 font-medium",
-                                  layoutDensity === 'compact' ? "text-[10px]" : "text-xs"
-                                )}>
-                                  Drop to assign
-                                </span>
-                              )}
-                            </div>
-                            
-                            {appointment ? (
-                              <div className="space-y-1">
-                                <div className={cn(
-                                  "px-2 py-1 rounded font-medium border",
-                                  layoutDensity === 'compact' ? "text-[10px]" : "text-xs",
-                                  appointment.therapistId ? COVERAGE_COLORS.covered : COVERAGE_COLORS.uncovered
-                                )}>
-                                  {appointment.therapistId ? (
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-1">
-                                        <User className={cn(
-                                          layoutDensity === 'compact' ? "h-2 w-2" : "h-3 w-3"
-                                        )} />
-                                        <span className="font-semibold">
-                                          {layoutDensity === 'compact' 
-                                            ? formatTherapistName(appointment.therapist)
-                                            : `${appointment.therapist?.firstName} ${appointment.therapist?.lastName}`
-                                          }
-                                        </span>
-                                      </div>
-                                      <button
-                                        onClick={() => handleUnassignTherapist(appointment)}
-                                        className="hover:bg-red-100 dark:hover:bg-red-900/30 p-1 rounded transition-colors"
-                                        title="Unassign therapist"
-                                      >
-                                        <X className={cn(
-                                          layoutDensity === 'compact' ? "h-2 w-2" : "h-3 w-3"
-                                        )} />
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <div className="flex items-center gap-1">
-                                      <AlertTriangle className={cn(
-                                        layoutDensity === 'compact' ? "h-2 w-2" : "h-3 w-3"
-                                      )} />
-                                      <span>{layoutDensity === 'compact' ? 'NEEDS' : 'NEEDS THERAPIST'}</span>
-                                    </div>
-                                  )}
+                            {/* Therapist initials badge */}
+                            {w > 28 && (
+                              <div
+                                className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ml-1.5"
+                                style={{ background: blockColor.border, color: '#fff' }}
+                              >
+                                {therapistInitials}
+                              </div>
+                            )}
+
+                            {/* Service type label + duration */}
+                            {w > 52 && (
+                              <div
+                                className="flex-1 px-1.5 min-w-0 leading-tight"
+                                style={{ color: blockColor.text }}
+                              >
+                                <div className="text-[11px] font-semibold truncate">
+                                  {svc ? svc.label : therapistInitials}
                                 </div>
-                                {layoutDensity !== 'compact' && (
-                                  <div className="text-xs text-gray-500 dark:text-gray-400">
-                                    {appointment.serviceType || 'Direct Service'}
+                                {w > 90 && (
+                                  <div className="text-[10px] opacity-70 truncate">
+                                    {fmtDur(appt.startTime, appt.endTime)}
                                   </div>
                                 )}
                               </div>
-                            ) : (
-                              <div 
-                                className={cn(
-                                  "text-gray-400 cursor-pointer hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors",
-                                  layoutDensity === 'compact' ? "text-[10px] p-1" : "text-xs p-2"
-                                )}
-                                onClick={() => onCellClick({ patientId: patient.id, timeSlot, selectedDate })}
-                                title="Click to add appointment"
+                            )}
+
+                            {/* Resize handle — only when canEdit */}
+                            {canEdit && (
+                              <div
+                                className="absolute right-0 top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize group/rz flex-shrink-0 rounded-r-full"
+                                onMouseDown={(e) => { e.stopPropagation(); beginDrag(e, appt, 'resize'); }}
+                                title="Drag to resize"
                               >
-                                <Plus className={cn(
-                                  "mx-auto mb-1 opacity-50",
-                                  layoutDensity === 'compact' ? "h-2 w-2" : "h-3 w-3"
-                                )} />
-                                {layoutDensity === 'compact' ? 'No' : 'No session'}
+                                <div
+                                  className="w-0.5 h-4 rounded-full opacity-0 group-hover/rz:opacity-50 transition-opacity"
+                                  style={{ background: blockColor.text }}
+                                />
                               </div>
                             )}
                           </div>
                         );
                       })}
-                      </div>
-                    )}
+                    </div>
                   </div>
                 );
               })}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
-  // Default grid view
-  return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex justify-between items-center">
-          <div>
-            <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-              Patient Coverage - {format(new Date(selectedDate), 'EEEE, MMMM d, yyyy')}
-            </h2>
-            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-              {filteredPatients.length} patients with scheduled sessions
-            </p>
-          </div>
-          
-          <div className="flex items-center gap-4 text-sm">
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-green-100 border border-green-300 rounded"></div>
-              <span>Fully Covered</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-yellow-100 border border-yellow-300 rounded"></div>
-              <span>Partially Covered</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 bg-red-100 border border-red-400 rounded animate-pulse"></div>
-              <span>Uncovered</span>
+              {/* Bottom padding */}
+              <div className="h-2" />
             </div>
           </div>
-        </div>
-      </div>
+        )}
 
-      {/* Patient Schedule Grids */}
-      <div className="space-y-6">
-        {filteredPatients.map(patient => {
-          const isExpanded = expandedPatients[patient.id] !== false; // Default expanded
-          const data = patientScheduleData[patient.id];
-          const therapistNames = Array.from(data.therapistCount).map(id => {
-            const therapist = therapists.find(t => t.id === id);
-            return formatTherapistName(therapist);
-          });
-          
-          return (
-            <div 
-              key={patient.id}
-              className="bg-white dark:bg-gray-800 rounded-lg border-2 overflow-hidden shadow-sm"
-              style={{ borderColor: patient.color || '#6B7280' }}
-            >
-              {/* Patient Header */}
-              <div 
-                className={cn(
-                  "p-4 border-b border-gray-200 dark:border-gray-700 cursor-pointer transition-colors",
-                  data.coverageStatus === 'covered' && "bg-green-50 dark:bg-green-900/20",
-                  data.coverageStatus === 'partial' && "bg-yellow-50 dark:bg-yellow-900/20", 
-                  data.coverageStatus === 'uncovered' && "bg-red-50 dark:bg-red-900/20"
-                )}
-                onClick={() => togglePatient(patient.id)}
+        {/* Legend */}
+        {rows.length > 0 && (
+          <div className="px-4 py-2.5 border-t border-gray-100 dark:border-gray-700 flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-gray-400 dark:text-gray-500">
+            {canEdit && (
+              <>
+                <span>drag block to move</span>
+                <span>drag right edge to resize</span>
+              </>
+            )}
+            <span>click to view details</span>
+            {/* Service type key */}
+            {Object.entries(SVC).map(([key, s]) => (
+              <span key={key} className="flex items-center gap-1">
+                <span
+                  className="inline-block w-2.5 h-2.5 rounded-sm border"
+                  style={{ background: s.bg, borderColor: s.border }}
+                />
+                {s.label}
+              </span>
+            ))}
+            {history.length > 0 && (
+              <span
+                className="text-blue-500 cursor-pointer hover:underline"
+                onClick={undo}
               >
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center gap-3">
-                    <div 
-                      className="w-3 h-3 rounded-full border-2 border-gray-300"
-                      style={{ backgroundColor: patient.color || '#6B7280' }}
-                      title="Patient color"
-                    ></div>
-                    
-                    <div>
-                      <h3 className="text-lg font-bold text-gray-900 dark:text-white">
-                        <span 
-                          title={formatFullPatientName(patient)}
-                          className="cursor-help"
-                        >
-                          {formatPatientName(patient)}
-                        </span>
-                      </h3>
-                      <div className="flex items-center gap-4 text-sm text-gray-600 dark:text-gray-400">
-                        <span>{data.totalHours.toFixed(1)} hours scheduled</span>
-                        <span>{data.appointments.length} sessions</span>
-                        {therapistNames.length > 0 && (
-                          <span>Therapists: {therapistNames.join(', ')}</span>
-                        )}
-                        {data.therapistRotation > 3 && (
-                          <span className="text-amber-600 font-medium">
-                            <AlertTriangle className="h-4 w-4 inline mr-1" />
-                            {data.therapistRotation} different therapists
-                          </span>
-                        )}
-                        {data.continuityScore !== undefined && (
-                          <span className={cn(
-                            "text-xs px-2 py-1 rounded-full",
-                            data.continuityScore >= 80 ? "bg-green-100 text-green-800" :
-                            data.continuityScore >= 60 ? "bg-yellow-100 text-yellow-800" :
-                            "bg-red-100 text-red-800"
-                          )}>
-                            Continuity: {data.continuityScore}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    {data.gaps.length > 0 && (
-                      <div className="text-xs text-orange-600 dark:text-orange-400">
-                        {data.gaps.length} schedule gaps
-                      </div>
-                    )}
-                    
-                    <Button variant="ghost" size="sm">
-                      {isExpanded ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              {isExpanded && (
-                <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
-                  <div className="min-w-max">
-                    {/* Time Slot Grid */}
-                    <div className="grid grid-cols-[140px_1fr] gap-0">
-                      {/* Time column header */}
-                      <div className="p-3 border-r border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 font-semibold">
-                        Time Slots
-                      </div>
-                      <div className="p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 font-semibold">
-                        Therapist Assignment
-                      </div>
-                      
-                      {/* Time slot rows */}
-                      {TIME_SLOTS.map((timeSlot, index) => {
-                        const appointment = getPatientAppointmentForSlot(patient.id, timeSlot);
-                        
-                        return (
-                          <React.Fragment key={timeSlot}>
-                            <div className={cn(
-                              "p-3 border-r border-b border-gray-100 dark:border-gray-700/50 text-sm font-medium",
-                              index % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50/30 dark:bg-gray-800/50"
-                            )}>
-                              {timeSlot}
-                            </div>
-                            
-                            <div className={cn(
-                              "p-3 border-b border-gray-100 dark:border-gray-700/50 min-h-[50px] flex items-center",
-                              index % 2 === 0 ? "bg-white dark:bg-gray-800" : "bg-gray-50/30 dark:bg-gray-800/50"
-                            )}>
-                              {appointment ? (
-                                <div 
-                                  className={cn(
-                                    "px-3 py-1 rounded-full border cursor-pointer hover:shadow-sm transition-all text-sm font-medium",
-                                    appointment.therapistId ? COVERAGE_COLORS.covered : COVERAGE_COLORS.uncovered
-                                  )}
-                                  onClick={() => onAppointmentClick(appointment)}
-                                  onDragOver={(e) => handleDragOver(e, patient.id, timeSlot)}
-                                  onDragLeave={handleDragLeave}
-                                  onDrop={(e) => handleDrop(e, patient.id, timeSlot)}
-                                >
-                                  {appointment.therapistId ? (
-                                    <div className="flex items-center justify-between">
-                                      <div className="flex items-center gap-1">
-                                        <User className="h-3 w-3" />
-                                        <span>{formatTherapistName(appointment.therapist)}</span>
-                                      </div>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleUnassignTherapist(appointment);
-                                        }}
-                                        className="hover:bg-red-100 dark:hover:bg-red-900/30 p-1 rounded transition-colors"
-                                        title="Unassign therapist"
-                                      >
-                                        <X className="h-3 w-3" />
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <>
-                                      <AlertTriangle className="h-3 w-3 inline mr-1" />
-                                      NEEDS THERAPIST
-                                    </>
-                                  )}
-                                </div>
-                              ) : (
-                                <div 
-                                  className="text-gray-400 text-sm cursor-pointer hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 p-2 rounded transition-colors flex items-center gap-1"
-                                  onClick={() => onCellClick({ patientId: patient.id, timeSlot, selectedDate })}
-                                  title="Click to add appointment"
-                                >
-                                  <Plus className="h-3 w-3 opacity-50" />
-                                  No session
-                                </div>
-                              )}
-                            </div>
-                          </React.Fragment>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+                undo last change
+              </span>
+            )}
+          </div>
+        )}
       </div>
+
+      {conflictState && (
+        <ConflictModal
+          movedAppt={conflictState.movedAppt}
+          originalTimes={conflictState.originalTimes}
+          conflicts={conflictState.conflicts}
+          allTodayAppts={todayAppts}
+          opStart={opStart}
+          opEnd={opEnd}
+          therapists={therapists}
+          patients={patients}
+          onConfirm={(resolvedAppts) => {
+            setLocalAppts(prev => {
+              let next = [...prev];
+              for (const a of resolvedAppts) next = next.map(x => x.id === a.id ? a : x);
+              return next;
+            });
+            for (const appt of resolvedAppts) onAppointmentUpdate(appt);
+            setConflictState(null);
+          }}
+          onCancel={() => setConflictState(null)}
+        />
+      )}
     </div>
   );
 }

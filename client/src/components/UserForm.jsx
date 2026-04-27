@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { X, Save, User, Mail, Phone, MapPin, Building, Shield, MessageCircle, Video } from 'lucide-react';
+import { X, Save, User, Mail, Phone, Building, Shield, MessageCircle, Video, BadgeCheck, Heart } from 'lucide-react';
 import { Button } from './ui/button';
 import { getLocations } from '../api/admin';
+import TagInput from './TagInput';
+import { INSURANCE_PANELS, ABA_CERTIFICATIONS } from '../lib/providerOptions';
 
 const UserForm = ({ 
   user = null, 
@@ -22,6 +24,11 @@ const UserForm = ({
     defaultLocationId: '',
     slackUserId: '',
     videoLink: '',
+    npi: '',
+    credentials: '',
+    providerLevel: '',
+    insurancePanels: [],
+    certifications: [],
     ...user // Override with existing user data if editing
   });
 
@@ -40,7 +47,9 @@ const UserForm = ({
         password: '', // Don't populate password for existing users
         roles: user.roles || [],
         locationIds: user.locationIds || [],
-        defaultLocationId: user.defaultLocationId || ''
+        defaultLocationId: user.defaultLocationId || '',
+        insurancePanels: user.insurancePanels || [],
+        certifications: user.certifications || [],
       });
     }
   }, [user]);
@@ -275,6 +284,84 @@ const UserForm = ({
         </div>
       </div>
       
+      {/* Insurance Panels */}
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <Heart className="h-5 w-5" />
+            Insurance Panels
+          </h3>
+          <p className="text-sm text-gray-500 mt-0.5">Which insurances is this provider credentialed/paneled with?</p>
+        </div>
+        <TagInput
+          value={formData.insurancePanels}
+          onChange={panels => setFormData(prev => ({ ...prev, insurancePanels: panels }))}
+          suggestions={INSURANCE_PANELS}
+          placeholder="Search insurances or type a custom one…"
+          description="Select from common plans or type a custom plan name and press Enter."
+        />
+      </div>
+
+      {/* Certifications */}
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-lg font-semibold flex items-center gap-2">
+            <BadgeCheck className="h-5 w-5" />
+            Certifications
+          </h3>
+          <p className="text-sm text-gray-500 mt-0.5">Professional certifications and training completed</p>
+        </div>
+        <TagInput
+          value={formData.certifications}
+          onChange={certs => setFormData(prev => ({ ...prev, certifications: certs }))}
+          suggestions={ABA_CERTIFICATIONS}
+          placeholder="Search certifications or type a custom one…"
+          description="Select common ABA certifications or type a custom one and press Enter."
+        />
+
+        {/* Provider / billing level */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+          <div>
+            <label className="block text-sm font-medium mb-1">Provider Level</label>
+            <select
+              name="providerLevel"
+              value={formData.providerLevel || ''}
+              onChange={handleInputChange}
+              className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800 text-sm"
+            >
+              <option value="">— not set —</option>
+              <option value="paraprofessional">Paraprofessional (HM)</option>
+              <option value="bachelor">Bachelor's level (HN)</option>
+              <option value="master">Master's level / BCBA (HO)</option>
+              <option value="doctorate">Doctorate / BCBA-D</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">NPI Number</label>
+            <input
+              type="text"
+              name="npi"
+              value={formData.npi || ''}
+              onChange={handleInputChange}
+              maxLength={10}
+              placeholder="10-digit NPI"
+              className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800 font-mono text-sm"
+            />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium mb-1">Credentials / Suffix</label>
+            <input
+              type="text"
+              name="credentials"
+              value={formData.credentials || ''}
+              onChange={handleInputChange}
+              placeholder="e.g. BCBA, LBA, RBT"
+              className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800 text-sm"
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Roles */}
       <div className="space-y-4">
         <h3 className="text-lg font-semibold flex items-center gap-2">

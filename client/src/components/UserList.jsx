@@ -5,6 +5,7 @@ import { getTherapists, getAvailableTherapists, getAvailableBCBAs } from '../api
 import { Link } from 'react-router-dom';
 import { Search, UserPlus, Check, X, Edit, Star, Users } from 'lucide-react';
 import { Button } from './ui/button';
+import { INSURANCE_PANELS, ABA_CERTIFICATIONS } from '../lib/providerOptions';
 
 const UserList = ({ 
   userType = 'all', // all, bcba, therapist
@@ -20,6 +21,8 @@ const UserList = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState(userType !== 'all' ? userType : 'all');
   const [activeFilter, setActiveFilter] = useState('all');
+  const [insuranceFilter, setInsuranceFilter] = useState('');
+  const [certFilter, setCertFilter] = useState('');
 
   // Choose the appropriate fetch function based on user type
   const getFetchFunction = () => {
@@ -50,18 +53,23 @@ const UserList = ({
 
   const filteredUsers = users.filter(user => {
     if (!user) return false;
-    
-    // Handle different user data structures
+
     const firstName = user.firstName || '';
     const lastName = user.lastName || '';
     const fullName = user.name || `${firstName} ${lastName}`;
     const email = user.email || '';
-    
-    const matchesSearch = 
+
+    const matchesSearch =
       fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       email.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    return matchesSearch;
+
+    const matchesInsurance = !insuranceFilter ||
+      (user.insurancePanels || []).some(p => p.toLowerCase().includes(insuranceFilter.toLowerCase()));
+
+    const matchesCert = !certFilter ||
+      (user.certifications || []).some(c => c.toLowerCase().includes(certFilter.toLowerCase()));
+
+    return matchesSearch && matchesInsurance && matchesCert;
   });
 
   const isSelected = (userId) => {
@@ -115,6 +123,38 @@ const UserList = ({
             <option value="true">Active</option>
             <option value="false">Inactive</option>
           </select>
+
+          <select
+            className="p-2 border rounded dark:bg-gray-800 dark:border-gray-700 min-w-[170px]"
+            value={insuranceFilter}
+            onChange={(e) => setInsuranceFilter(e.target.value)}
+          >
+            <option value="">All Insurances</option>
+            {INSURANCE_PANELS.map(p => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+
+          <select
+            className="p-2 border rounded dark:bg-gray-800 dark:border-gray-700 min-w-[170px]"
+            value={certFilter}
+            onChange={(e) => setCertFilter(e.target.value)}
+          >
+            <option value="">All Certifications</option>
+            {ABA_CERTIFICATIONS.map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+
+          {(insuranceFilter || certFilter) && (
+            <button
+              type="button"
+              onClick={() => { setInsuranceFilter(''); setCertFilter(''); }}
+              className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700 border rounded dark:border-gray-700"
+            >
+              Clear filters
+            </button>
+          )}
         </div>
       )}
       
@@ -139,6 +179,12 @@ const UserList = ({
                     Role
                   </th>
                 )}
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider hidden lg:table-cell">
+                  Insurance Panels
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider hidden xl:table-cell">
+                  Certifications
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">
                   Status
                 </th>
@@ -204,6 +250,30 @@ const UserList = ({
                         )}
                       </td>
                     )}
+                    <td className="px-6 py-4 text-sm hidden lg:table-cell">
+                      <div className="flex flex-wrap gap-1 max-w-[220px]">
+                        {(user.insurancePanels || []).slice(0, 3).map(p => (
+                          <span key={p} className="px-1.5 py-0.5 rounded text-xs bg-teal-50 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300 border border-teal-100 dark:border-teal-800 whitespace-nowrap">
+                            {p}
+                          </span>
+                        ))}
+                        {(user.insurancePanels || []).length > 3 && (
+                          <span className="text-xs text-gray-400">+{user.insurancePanels.length - 3} more</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-sm hidden xl:table-cell">
+                      <div className="flex flex-wrap gap-1 max-w-[220px]">
+                        {(user.certifications || []).slice(0, 2).map(c => (
+                          <span key={c} className="px-1.5 py-0.5 rounded text-xs bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 border border-violet-100 dark:border-violet-800 whitespace-nowrap">
+                            {c.split(' – ')[0].split(' (')[0]}
+                          </span>
+                        ))}
+                        {(user.certifications || []).length > 2 && (
+                          <span className="text-xs text-gray-400">+{user.certifications.length - 2} more</span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       {user.active !== undefined ? (
                         <span className={`px-2 py-1 rounded-full text-xs ${

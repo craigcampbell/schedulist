@@ -92,6 +92,7 @@ const getUpcomingSchedule = async (req, res) => {
     const formattedAppointments = appointments.map(appt => ({
       id: appt.id,
       title: appt.title,
+      serviceType: appt.serviceType,
       startTime: appt.startTime,
       endTime: appt.endTime,
       status: appt.status,

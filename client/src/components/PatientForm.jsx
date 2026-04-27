@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createPatient, updatePatient } from '../api/patients';
+import { createPatient, updatePatient, getPatientById } from '../api/patients';
 import ColorPicker from './ColorPicker';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { useAuth } from '../context/auth-context';
@@ -27,9 +27,50 @@ const PatientForm = ({ patient = null, onClose, onSuccess }) => {
     color: patient?.color || '#6B7280',
     teamId: patient?.teamId || '',
     serviceLocationType: patient?.serviceLocationType || 'clinic',
+    // Billing & insurance
+    memberId: patient?.memberId || '',
+    groupNumber: patient?.groupNumber || '',
+    primaryDiagnosisCode: patient?.primaryDiagnosisCode || 'F84.0',
+    secondaryDiagnosisCodes: patient?.secondaryDiagnosisCodes || [],
+    authorizationNumber: patient?.authorizationNumber || '',
+    authorizationStartDate: patient?.authorizationStartDate || '',
+    authorizationEndDate: patient?.authorizationEndDate || '',
+    authorizedUnits: patient?.authorizedUnits || '',
+    insuranceNotes: patient?.insuranceNotes || '',
   });
 
+  const [secondaryCodeInput, setSecondaryCodeInput] = useState('');
+
   const [errors, setErrors] = useState({});
+
+  // Fetch full patient detail (includes billing fields) when editing
+  const { data: fullPatient } = useQuery({
+    queryKey: ['patient', patient?.id],
+    queryFn: () => getPatientById(patient.id),
+    enabled: isEditMode && !!patient?.id,
+    staleTime: 30_000,
+  });
+
+  // Sync billing fields from full patient data once loaded
+  useEffect(() => {
+    if (!fullPatient) return;
+    setFormData(prev => ({
+      ...prev,
+      memberId: fullPatient.memberId || '',
+      groupNumber: fullPatient.groupNumber || '',
+      primaryDiagnosisCode: fullPatient.primaryDiagnosisCode || 'F84.0',
+      secondaryDiagnosisCodes: fullPatient.secondaryDiagnosisCodes || [],
+      authorizationNumber: fullPatient.authorizationNumber || '',
+      authorizationStartDate: fullPatient.authorizationStartDate || '',
+      authorizationEndDate: fullPatient.authorizationEndDate || '',
+      authorizedUnits: fullPatient.authorizedUnits || '',
+      insuranceNotes: fullPatient.insuranceNotes || '',
+      // Also sync other detail-only fields that may be missing from list view
+      insuranceId: fullPatient.insuranceId || prev.insuranceId,
+      phone: fullPatient.phone || prev.phone,
+      address: fullPatient.address || prev.address,
+    }));
+  }, [fullPatient]);
 
   // Fetch teams based on user role
   const { data: teams = [] } = useQuery({
@@ -134,6 +175,10 @@ const PatientForm = ({ patient = null, onClose, onSuccess }) => {
     const dataToSubmit = {
       ...formData,
       requiredWeeklyHours: formData.requiredWeeklyHours ? parseFloat(formData.requiredWeeklyHours) : null,
+      authorizedUnits: formData.authorizedUnits ? parseInt(formData.authorizedUnits) : null,
+      authorizationStartDate: formData.authorizationStartDate || null,
+      authorizationEndDate: formData.authorizationEndDate || null,
+      secondaryDiagnosisCodes: formData.secondaryDiagnosisCodes.length > 0 ? formData.secondaryDiagnosisCodes : null,
     };
 
     console.log('Submitting patient data:', { isEditMode, patientId: patient?.id, data: dataToSubmit });
@@ -383,6 +428,207 @@ const PatientForm = ({ patient = null, onClose, onSuccess }) => {
                   </label>
                 ))}
               </div>
+            </div>
+          </div>
+
+          {/* Billing & Insurance */}
+          <div>
+            <h3 className="text-lg font-medium text-gray-900 mb-1">Billing &amp; Insurance</h3>
+            <p className="text-xs text-gray-500 mb-4">Sensitive fields are encrypted at rest (HIPAA)</p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label htmlFor="memberId" className="block text-sm font-medium text-gray-700">
+                  Member ID <span className="text-xs text-gray-400">(encrypted)</span>
+                </label>
+                <input
+                  type="text"
+                  name="memberId"
+                  id="memberId"
+                  value={formData.memberId}
+                  onChange={handleChange}
+                  placeholder="e.g. ABC123456789"
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="groupNumber" className="block text-sm font-medium text-gray-700">
+                  Group Number <span className="text-xs text-gray-400">(encrypted)</span>
+                </label>
+                <input
+                  type="text"
+                  name="groupNumber"
+                  id="groupNumber"
+                  value={formData.groupNumber}
+                  onChange={handleChange}
+                  placeholder="e.g. GRP001"
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="primaryDiagnosisCode" className="block text-sm font-medium text-gray-700">
+                  Primary Diagnosis (ICD-10)
+                </label>
+                <select
+                  name="primaryDiagnosisCode"
+                  id="primaryDiagnosisCode"
+                  value={formData.primaryDiagnosisCode}
+                  onChange={handleChange}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                >
+                  {[
+                    { code: 'F84.0', description: 'Autism Spectrum Disorder' },
+                    { code: 'F84.9', description: 'Pervasive Developmental Disorder, Unspecified' },
+                    { code: 'F84.5', description: "Asperger's Syndrome" },
+                    { code: 'F90.0', description: 'ADHD, Predominantly Inattentive' },
+                    { code: 'F90.1', description: 'ADHD, Predominantly Hyperactive-Impulsive' },
+                    { code: 'F90.2', description: 'ADHD, Combined Presentation' },
+                    { code: 'F80.4', description: 'Speech and Language Developmental Delay' },
+                    { code: 'F41.0', description: 'Panic Disorder' },
+                    { code: 'F42.2', description: 'OCD' },
+                    { code: 'F31.9', description: 'Bipolar Disorder, Unspecified' },
+                    { code: 'F70',   description: 'Mild Intellectual Disability' },
+                    { code: 'F71',   description: 'Moderate Intellectual Disability' },
+                  ].map(({ code, description }) => (
+                    <option key={code} value={code}>{code} – {description}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  Secondary Diagnosis Codes
+                </label>
+                <div className="mt-1 flex gap-2">
+                  <input
+                    type="text"
+                    value={secondaryCodeInput}
+                    onChange={e => setSecondaryCodeInput(e.target.value.toUpperCase())}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' || e.key === ',') {
+                        e.preventDefault();
+                        const code = secondaryCodeInput.trim();
+                        if (code && !formData.secondaryDiagnosisCodes.includes(code)) {
+                          setFormData(prev => ({ ...prev, secondaryDiagnosisCodes: [...prev.secondaryDiagnosisCodes, code] }));
+                        }
+                        setSecondaryCodeInput('');
+                      }
+                    }}
+                    placeholder="e.g. F90.2 then Enter"
+                    className="block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const code = secondaryCodeInput.trim();
+                      if (code && !formData.secondaryDiagnosisCodes.includes(code)) {
+                        setFormData(prev => ({ ...prev, secondaryDiagnosisCodes: [...prev.secondaryDiagnosisCodes, code] }));
+                      }
+                      setSecondaryCodeInput('');
+                    }}
+                    className="px-3 py-2 text-sm bg-gray-100 border border-gray-300 rounded-md hover:bg-gray-200"
+                  >
+                    Add
+                  </button>
+                </div>
+                {formData.secondaryDiagnosisCodes.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {formData.secondaryDiagnosisCodes.map(code => (
+                      <span key={code} className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+                        {code}
+                        <button
+                          type="button"
+                          onClick={() => setFormData(prev => ({ ...prev, secondaryDiagnosisCodes: prev.secondaryDiagnosisCodes.filter(c => c !== code) }))}
+                          className="text-blue-400 hover:text-blue-600 font-bold"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="authorizationNumber" className="block text-sm font-medium text-gray-700">
+                  Authorization Number
+                </label>
+                <input
+                  type="text"
+                  name="authorizationNumber"
+                  id="authorizationNumber"
+                  value={formData.authorizationNumber}
+                  onChange={handleChange}
+                  placeholder="e.g. AUTH2025001234"
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="authorizedUnits" className="block text-sm font-medium text-gray-700">
+                  Authorized Units <span className="text-xs text-gray-400">(15-min units)</span>
+                </label>
+                <input
+                  type="number"
+                  name="authorizedUnits"
+                  id="authorizedUnits"
+                  min="0"
+                  step="1"
+                  value={formData.authorizedUnits}
+                  onChange={handleChange}
+                  placeholder="e.g. 256"
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                />
+                {formData.authorizedUnits && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    ≈ {(formData.authorizedUnits / 4).toFixed(1)} hours
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="authorizationStartDate" className="block text-sm font-medium text-gray-700">
+                  Auth Start Date
+                </label>
+                <input
+                  type="date"
+                  name="authorizationStartDate"
+                  id="authorizationStartDate"
+                  value={formData.authorizationStartDate}
+                  onChange={handleChange}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="authorizationEndDate" className="block text-sm font-medium text-gray-700">
+                  Auth End Date
+                </label>
+                <input
+                  type="date"
+                  name="authorizationEndDate"
+                  id="authorizationEndDate"
+                  value={formData.authorizationEndDate}
+                  onChange={handleChange}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <label htmlFor="insuranceNotes" className="block text-sm font-medium text-gray-700">
+                Insurance Notes <span className="text-xs text-gray-400">(admin only)</span>
+              </label>
+              <textarea
+                name="insuranceNotes"
+                id="insuranceNotes"
+                rows={3}
+                value={formData.insuranceNotes}
+                onChange={handleChange}
+                placeholder="Billing rules, special requirements, notes about coverage..."
+                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+              />
             </div>
           </div>
 

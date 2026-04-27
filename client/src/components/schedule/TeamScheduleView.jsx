@@ -1,971 +1,783 @@
-import React, { useState, useMemo } from "react";
-import { format, parseISO, isSameDay } from "date-fns";
-import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
-import { cn } from "../../lib/utils";
-import { Clock, MapPin, User, Calendar, Plus } from "lucide-react";
-import { Button } from "../ui/button";
-import {
-  groupConsecutiveAppointments,
-  getSpannedTimeSlots,
-  getGroupPositionInSlot,
-} from "../../utils/appointment-grouping";
-import { getLocationTimeSlots, getMostCommonLocation } from "../../utils/location-time-slots";
-import ResizableAppointment from "./ResizableAppointment";
-import { getAppointmentType } from "../../utils/appointmentTypes";
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { format, isSameDay } from 'date-fns';
+import { cn } from '../../lib/utils';
+import { Undo2, Users, ChevronDown, ChevronRight } from 'lucide-react';
+import { Button } from '../ui/button';
+import ConflictModal, { findConflicts } from './ConflictModal';
 
-const SERVICE_TYPE_COLORS = {
-  direct: "bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200",
-  indirect: "bg-gray-100 dark:bg-gray-800/40 text-gray-800 dark:text-gray-200",
-  supervision:
-    "bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-200",
-  noOw: "bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-200",
-  lunch: "bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-200",
-  circle:
-    "bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200",
-  cleaning:
-    "bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-200",
-  parentTraining:
-    "bg-teal-100 dark:bg-teal-900/20 text-teal-800 dark:text-teal-200",
-  jojo: "bg-green-200 dark:bg-green-900/30 text-green-800 dark:text-green-200",
-  zeki: "bg-amber-200 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200",
-  jonDu: "bg-blue-200 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200",
-  masa: "bg-cyan-200 dark:bg-cyan-900/30 text-cyan-800 dark:text-cyan-200",
-  brTa: "bg-lime-200 dark:bg-lime-900/30 text-lime-800 dark:text-lime-200",
-  krRi: "bg-purple-200 dark:bg-purple-900/30 text-purple-800 dark:text-purple-200",
-  leYu: "bg-yellow-200 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-200",
-  liWu: "bg-pink-200 dark:bg-pink-900/30 text-pink-800 dark:text-pink-200",
+// ─── Layout constants (must match UnifiedScheduleView) ────────────────────────
+const PX_PER_MIN  = 2.2;
+const ROW_H       = 58;
+const LABEL_W     = 200;
+const SNAP        = 15;
+const CONNECT_GAP = 4;
+
+// ─── Service type palette ──────────────────────────────────────────────────────
+const SVC = {
+  direct:      { bg: '#EFF6FF', border: '#3B82F6', solid: '#3B82F6', text: '#1D4ED8', label: 'Direct' },
+  circle:      { bg: '#FDF2F8', border: '#EC4899', solid: '#EC4899', text: '#9D174D', label: 'Circle' },
+  indirect:    { bg: '#F3F4F6', border: '#9CA3AF', solid: '#6B7280', text: '#374151', label: 'Indirect' },
+  supervision: { bg: '#F5F3FF', border: '#8B5CF6', solid: '#8B5CF6', text: '#5B21B6', label: 'Supervision' },
+  lunch:       { bg: '#ECFDF5', border: '#10B981', solid: '#10B981', text: '#065F46', label: 'Lunch' },
+  cleaning:    { bg: '#FFF7ED', border: '#F97316', solid: '#F97316', text: '#C2410C', label: 'Cleaning' },
 };
 
-export default function TeamScheduleView({
-  teams,
-  appointments = [],
-  selectedDate,
-  showLocationView = false,
-  userRole = null, // Add userRole prop to determine name display format
-  onAppointmentClick = () => {},
-  onCellClick = () => {},
-  onAppointmentUpdate = () => {},
-  location = null // Add location prop for location-specific time slots
-}) {
-  const [expandedTeams, setExpandedTeams] = useState({});
-  const [selectedAppointment, setSelectedAppointment] = useState(null);
+const SVC_DEFAULT = SVC.direct;
 
-  // Get appointments for selected date
-  const todaysAppointments = useMemo(() => {
-    return appointments.filter(app => 
-      app && app.startTime && isSameDay(new Date(app.startTime), new Date(selectedDate))
-    );
-  }, [appointments, selectedDate]);
+// ─── Team fallback colors (when team.color is absent) ─────────────────────────
+const TEAM_COLORS = [
+  '#3B82F6','#10B981','#F59E0B','#8B5CF6',
+  '#EC4899','#14B8A6','#F97316','#6366F1',
+];
 
-  // Get location-specific time slots
-  const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
-    // Use provided location or find most common location from appointments
-    const targetLocation = location || getMostCommonLocation(todaysAppointments);
-    return getLocationTimeSlots(targetLocation, 'excel');
-  }, [location, todaysAppointments]);
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const toMins = (iso) => { const d = new Date(iso); return d.getHours() * 60 + d.getMinutes(); };
+const snap   = (m)   => Math.round(m / SNAP) * SNAP;
 
-  // Calculate how many slots an appointment group spans
-  const calculateGroupSpan = (group) => {
-    const start = new Date(group.startTime);
-    const end = new Date(group.endTime);
-    const durationMinutes = (end - start) / (1000 * 60);
-    return Math.ceil(durationMinutes / 30);
-  };
+function fmt12(iso) {
+  const d = new Date(iso);
+  const h = d.getHours(), m = d.getMinutes();
+  const p = h >= 12 ? 'PM' : 'AM';
+  const hd = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${hd}:${String(m).padStart(2, '0')} ${p}`;
+}
 
-  // Get the starting slot index for an appointment group
-  const getGroupStartSlotIndex = (group) => {
-    const start = new Date(group.startTime);
-    const startMinutes = start.getHours() * 60 + start.getMinutes();
+function fmtDur(iso1, iso2) {
+  const mins = (new Date(iso2) - new Date(iso1)) / 60000;
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), r = mins % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
 
-    return TIME_SLOTS.findIndex((slot) => {
-      const slotRange = TIME_SLOT_RANGES[slot];
-      return slotRange && startMinutes >= slotRange.start && startMinutes < slotRange.end;
-    });
-  };
+function parseHHMM(str, fallback) {
+  if (!str) return fallback;
+  const [h, m] = str.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
 
-  // Format dates and times
-  const formatDayOfWeek = (date) => {
-    return format(new Date(date), "EEEE");
-  };
+function svcStyle(serviceType) {
+  return SVC[serviceType] || SVC_DEFAULT;
+}
 
-  const formatDayOfMonth = (date) => {
-    return format(new Date(date), "M/d");
-  };
+function teamColor(team, idx) {
+  return team.color || TEAM_COLORS[idx % TEAM_COLORS.length];
+}
 
-  const formatTime = (dateTimeString) => {
-    try {
-      return format(new Date(dateTimeString), "h:mm a");
-    } catch (error) {
-      return "Invalid time";
+// ─── HourHeader ───────────────────────────────────────────────────────────────
+// Shared sticky time ruler used once per team section.
+function HourHeader({ gsMin, geMin, opStart, opEnd, gridW }) {
+  const hourMarks = useMemo(() => {
+    const marks = [];
+    for (let h = Math.floor(gsMin / 60); h <= Math.ceil(geMin / 60); h++) {
+      const x = (h * 60 - gsMin) * PX_PER_MIN;
+      const p = h >= 12 ? 'PM' : 'AM';
+      const hd = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      marks.push({ x, label: `${hd}${p}`, isHalf: false, isNoon: h === 12 });
+      const xh = ((h + 0.5) * 60 - gsMin) * PX_PER_MIN;
+      if (xh > 0 && xh < gridW) marks.push({ x: xh, label: '', isHalf: true, isNoon: false });
     }
-  };
-
-  // Format patient name based on user role
-  const formatPatientName = (patient, appointment) => {
-    // If no patient and appointment has a service type, show the service type
-    if (!patient && appointment) {
-      const appointmentType = getAppointmentType(appointment.serviceType || 'direct');
-      return appointment.title || appointmentType.label;
-    }
-    
-    if (!patient) return "Unknown";
-
-    // For all roles in schedule view, show abbreviated names (first 2 + last 2 chars)
-    const firstTwo = patient.firstName?.substring(0, 2) || "--";
-    const lastTwo = patient.lastName?.substring(0, 2) || "--";
-    return `${firstTwo}${lastTwo}`;
-  };
-
-  // Format full patient name for hover/tooltip
-  const formatFullPatientName = (patient, appointment) => {
-    // If no patient and appointment has a service type, show the service type
-    if (!patient && appointment) {
-      const appointmentType = getAppointmentType(appointment.serviceType || 'direct');
-      return appointment.title || appointmentType.label;
-    }
-    
-    if (!patient) return "Unknown";
-    return `${patient.firstName || "Unknown"} ${patient.lastName || ""}`;
-  };
-
-  // Group appointments by therapist and group consecutive ones
-  const getTherapistAppointments = (therapistId) => {
-    // Filter appointments for this therapist on the selected date
-    const therapistApps = appointments.filter(
-      (app) =>
-        app.therapistId === therapistId &&
-        isSameDay(new Date(app.startTime), new Date(selectedDate)),
-    );
-
-    // Sort by start time
-    const sortedApps = therapistApps.sort(
-      (a, b) => new Date(a.startTime) - new Date(b.startTime),
-    );
-
-    // Group consecutive appointments
-    return groupConsecutiveAppointments(sortedApps);
-  };
-
-  // Get appointments for a specific date
-  const getAppointmentsForDate = () => {
-    return appointments.filter((app) =>
-      isSameDay(new Date(app.startTime), new Date(selectedDate)),
-    );
-  };
-
-  // Group appointments by therapist without team information
-  const getTherapistGroups = () => {
-    const therapistGroups = {};
-    const dateAppointments = getAppointmentsForDate();
-
-    dateAppointments.forEach((app) => {
-      if (!app.therapistId || !app.therapist) return;
-
-      if (!therapistGroups[app.therapistId]) {
-        therapistGroups[app.therapistId] = {
-          id: app.therapistId,
-          name:
-            app.therapist.name ||
-            `${app.therapist.firstName || ""} ${app.therapist.lastName || ""}`,
-          firstName: app.therapist.firstName,
-          lastName: app.therapist.lastName,
-          appointments: [],
-        };
-      }
-
-      therapistGroups[app.therapistId].appointments.push(app);
-    });
-
-    // Sort and group appointments for each therapist
-    Object.values(therapistGroups).forEach((therapist) => {
-      therapist.appointments.sort(
-        (a, b) => new Date(a.startTime) - new Date(b.startTime),
-      );
-      therapist.appointmentGroups = groupConsecutiveAppointments(
-        therapist.appointments,
-      );
-    });
-
-    return Object.values(therapistGroups);
-  };
-
-  // Check if an appointment is in a time slot
-  const isAppointmentInTimeSlot = (appointment, timeSlot) => {
-    const [slotStart, slotEnd] = TIME_SLOT_MAP[timeSlot] || [];
-    if (!slotStart || !slotEnd) return false;
-
-    const appStart = new Date(appointment.startTime);
-    const appEnd = new Date(appointment.endTime);
-
-    const appStartHour = appStart.getHours() + appStart.getMinutes() / 60;
-    const appEndHour = appEnd.getHours() + appEnd.getMinutes() / 60;
-
-    // Check if appointment overlaps with this time slot
-    return (
-      (appStartHour >= slotStart && appStartHour < slotEnd) || // Starts in this slot
-      (appEndHour > slotStart && appEndHour <= slotEnd) || // Ends in this slot
-      (appStartHour <= slotStart && appEndHour >= slotEnd) // Spans across this slot
-    );
-  };
-
-  // Get service code for display
-  const getAppointmentServiceType = (appointment) => {
-    if (!appointment) return null;
-
-    // Extract the first word from the appointment title/serviceType if exists
-    const serviceType =
-      appointment.serviceType ||
-      (appointment.title || "").split(" ")[0].toLowerCase();
-
-    if (serviceType) {
-      // Map common words to service types
-      const serviceMap = {
-        direct: "direct",
-        supervision: "supervision",
-        indirect: "indirect",
-        lunch: "lunch",
-        circle: "circle",
-        "no-ow": "noOw",
-        noow: "noOw",
-        cleaning: "cleaning",
-      };
-
-      return serviceMap[serviceType.toLowerCase()] || "direct";
-    }
-
-    return "direct"; // Default
-  };
-
-  // Get the appointment group that occupies a specific slot
-  const getGroupForSlot = (therapistGroups, slotIndex) => {
-    for (const group of therapistGroups) {
-      const startIndex = getGroupStartSlotIndex(group);
-      const span = calculateGroupSpan(group);
-
-      if (slotIndex >= startIndex && slotIndex < startIndex + span) {
-        return {
-          group,
-          isStart: slotIndex === startIndex,
-          relativeIndex: slotIndex - startIndex,
-          totalSpan: span,
-        };
-      }
-    }
-    return null;
-  };
-
-  // Toggle team expanded/collapsed
-  const toggleTeam = (teamId) => {
-    setExpandedTeams((prev) => ({
-      ...prev,
-      [teamId]: !prev[teamId],
-    }));
-  };
-
-  // Handle appointment click
-  const handleAppointmentClick = (appointment) => {
-    setSelectedAppointment(appointment);
-    onAppointmentClick(appointment);
-  };
-
-  const closeAppointmentDetails = () => {
-    setSelectedAppointment(null);
-  };
-
-  // Check if a time slot is available for a therapist
-  const checkAvailability = (
-    newStartTime,
-    newEndTime,
-    therapistId,
-    excludeGroupId = null,
-  ) => {
-    const start = new Date(newStartTime);
-    const end = new Date(newEndTime);
-
-    // Get all appointments for this therapist on the selected date
-    const therapistAppointments = appointments.filter(
-      (app) =>
-        app.therapistId === therapistId &&
-        isSameDay(new Date(app.startTime), new Date(selectedDate)),
-    );
-
-    // Check for conflicts
-    for (const app of therapistAppointments) {
-      // Skip appointments that are part of the group being resized
-      const appointmentGroups = getTherapistAppointments(therapistId);
-      const isPartOfExcludedGroup = appointmentGroups.some(
-        (group) =>
-          group.id === excludeGroupId &&
-          group.appointments.some((a) => a.id === app.id),
-      );
-
-      if (isPartOfExcludedGroup) continue;
-
-      const appStart = new Date(app.startTime);
-      const appEnd = new Date(app.endTime);
-
-      // Check for overlap
-      if (
-        (start >= appStart && start < appEnd) || // New start is during existing
-        (end > appStart && end <= appEnd) || // New end is during existing
-        (start <= appStart && end >= appEnd) // New appointment encompasses existing
-      ) {
-        return false; // Conflict found
-      }
-    }
-
-    return true; // No conflicts
-  };
-
-  // Handle appointment resize
-  const handleAppointmentResize = (groupId, newStartTime, newEndTime) => {
-    // Find the group that was resized
-    const allGroups = teams.flatMap(
-      (team) =>
-        team.Members?.flatMap((member) =>
-          getTherapistAppointments(member.id),
-        ) || [],
-    );
-
-    const resizedGroup = allGroups.find((group) => group.id === groupId);
-    if (!resizedGroup) return;
-
-    // Calculate the time difference to apply to all appointments in the group
-    const originalStart = new Date(resizedGroup.startTime);
-    const originalEnd = new Date(resizedGroup.endTime);
-    const newStart = new Date(newStartTime);
-    const newEnd = new Date(newEndTime);
-
-    const startDiff = newStart - originalStart;
-    const endDiff = newEnd - originalEnd;
-
-    // Update all appointments in the group
-    resizedGroup.appointments.forEach((appointment) => {
-      const appointmentStart = new Date(appointment.startTime);
-      const appointmentEnd = new Date(appointment.endTime);
-
-      const updatedAppointment = {
-        ...appointment,
-        startTime: new Date(
-          appointmentStart.getTime() + startDiff,
-        ).toISOString(),
-        endTime: new Date(appointmentEnd.getTime() + endDiff).toISOString(),
-      };
-
-      onAppointmentUpdate(updatedAppointment);
-    });
-  };
-
-  // Handle drag end for appointments
-  const handleDragEnd = (result) => {
-    if (!result.destination) return;
-
-    const { draggableId, source, destination } = result;
-
-    // Parse the droppable IDs to get therapist and time slot info
-    const sourceParts = source.droppableId.split("-");
-    const destParts = destination.droppableId.split("-");
-    const sourceTherapistId = sourceParts[2];
-    const sourceSlotIndex = sourceParts[3];
-    const destTherapistId = destParts[2];
-    const destSlotIndex = destParts[3];
-
-    // Get the appointment group that was dragged
-    const draggedGroup = getTherapistAppointments(sourceTherapistId).find(
-      (group) => group.id === draggableId,
-    );
-
-    if (!draggedGroup) return;
-
-    // Calculate new start time based on destination slot
-    const targetSlot = TIME_SLOTS[parseInt(destSlotIndex)];
-    const [targetTime] = targetSlot.split("-");
-    const [targetHour, targetMinute] = targetTime.split(":").map((str) => {
-      const match = str.match(/\d+/);
-      return match ? parseInt(match[0]) : 0;
-    });
-
-    // Handle AM/PM
-    let adjustedHour = targetHour;
-    if (targetSlot.includes("PM") && targetHour !== 12) {
-      adjustedHour += 12;
-    } else if (targetSlot.includes("AM") && targetHour === 12) {
-      adjustedHour = 0;
-    }
-
-    // Calculate duration of the appointment group
-    const originalStart = new Date(draggedGroup.startTime);
-    const originalEnd = new Date(draggedGroup.endTime);
-    const durationMs = originalEnd - originalStart;
-
-    // Create new start and end times
-    const newStart = new Date(selectedDate);
-    newStart.setHours(adjustedHour, targetMinute || 0, 0, 0);
-    const newEnd = new Date(newStart.getTime() + durationMs);
-
-    // Update all appointments in the group
-    draggedGroup.appointments.forEach((appointment, index) => {
-      const appointmentStart = new Date(appointment.startTime);
-      const appointmentEnd = new Date(appointment.endTime);
-      const appointmentDuration = appointmentEnd - appointmentStart;
-      const offsetFromGroupStart = appointmentStart - originalStart;
-
-      const updatedAppointment = {
-        ...appointment,
-        therapistId: destTherapistId,
-        startTime: new Date(
-          newStart.getTime() + offsetFromGroupStart,
-        ).toISOString(),
-        endTime: new Date(
-          newStart.getTime() + offsetFromGroupStart + appointmentDuration,
-        ).toISOString(),
-      };
-
-      onAppointmentUpdate(updatedAppointment);
-    });
-  };
-
-  // If showing location view (no teams) but have appointments
-  if (showLocationView && appointments.length > 0) {
-    const therapistGroups = getTherapistGroups();
-
-    if (therapistGroups.length === 0) {
-      return (
-        <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-          <Calendar className="h-12 w-12 mx-auto mb-4 opacity-30" />
-          <p className="text-lg font-medium mb-2">No Appointments</p>
-          <p>There are no appointments scheduled for this date.</p>
-        </div>
-      );
-    }
-
-    return (
-      <div className="space-y-8">
-        <div className="border dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 shadow-sm">
-          <div className="bg-blue-50 dark:bg-blue-900/20 p-3 border-b dark:border-gray-700">
-            <h3 className="font-bold text-lg text-blue-900 dark:text-blue-100">
-              Location Schedule {format(new Date(selectedDate), "MMMM d, yyyy")}
-            </h3>
-          </div>
-
-          <div className="p-4">
-            <div className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg">
-              {therapistGroups.map((therapist) => (
-                <div key={therapist.id} className="p-3">
-                  <h4 className="font-medium mb-2">{therapist.name}</h4>
-                  <div className="pl-4 divide-y divide-gray-100 dark:divide-gray-800">
-                    {therapist.appointmentGroups.map((group) => (
-                      <div
-                        key={group.id}
-                        className="py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
-                        onClick={() =>
-                          handleAppointmentClick(group.appointments[0])
-                        }
-                      >
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <div className="font-medium">
-                              <span
-                                title={formatFullPatientName(group.patient, group.appointments[0])}
-                                className="cursor-help"
-                              >
-                                {formatPatientName(group.patient, group.appointments[0])}
-                              </span>
-                              {group.appointments.length > 1 && (
-                                <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">
-                                  {group.appointments.length} sessions
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
-                              {formatTime(group.startTime)} -{" "}
-                              {formatTime(group.endTime)}
-                              {group.totalDuration && (
-                                <span className="ml-2">
-                                  ({group.totalDuration} mins)
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                          <div
-                            className={cn(
-                              "text-xs px-2 py-1 rounded-full",
-                              SERVICE_TYPE_COLORS[
-                                getAppointmentServiceType(group) || "direct"
-                              ],
-                            )}
-                          >
-                            {group.serviceType ||
-                              getAppointmentServiceType(group) ||
-                              "Session"}
-                          </div>
-                        </div>
-
-                        {group.location && (
-                          <div className="mt-1 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                            <MapPin className="h-4 w-4 mr-1" />
-                            <span>{group.location.name}</span>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // No teams available and not showing location view
-  if (teams.length === 0) {
-    return (
-      <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-        <Calendar className="h-12 w-12 mx-auto mb-4 opacity-30" />
-        <p className="text-lg font-medium mb-2">No Teams Available</p>
-        <p>There are no teams configured yet. Create teams to use this view.</p>
-      </div>
-    );
-  }
+    return marks;
+  }, [gsMin, geMin, gridW]);
 
   return (
-    <DragDropContext onDragEnd={handleDragEnd}>
-      <div className="space-y-8">
-        {teams.map((team) => {
-          const isExpanded = expandedTeams[team.id] !== false; // Default to expanded
+    <div className="flex sticky top-0 z-10 bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
+      {/* Corner label */}
+      <div
+        style={{ width: LABEL_W, flexShrink: 0, height: 36 }}
+        className="px-4 flex items-center text-xs font-medium text-gray-400 dark:text-gray-500 border-r border-gray-100 dark:border-gray-700"
+      >
+        Therapist
+      </div>
+
+      {/* Ruler */}
+      <div className="relative flex-1" style={{ height: 36 }}>
+        {/* Out-of-hours shading */}
+        {gsMin < opStart && (
+          <div
+            className="absolute top-0 bottom-0 pointer-events-none"
+            style={{ left: 0, width: (opStart - gsMin) * PX_PER_MIN, background: 'rgba(0,0,0,0.04)' }}
+          />
+        )}
+        {geMin > opEnd && (
+          <div
+            className="absolute top-0 bottom-0 pointer-events-none"
+            style={{ left: (opEnd - gsMin) * PX_PER_MIN, right: 0, background: 'rgba(0,0,0,0.04)' }}
+          />
+        )}
+
+        {hourMarks.map((m, i) => (
+          <div
+            key={i}
+            className="absolute top-0 bottom-0 flex flex-col justify-center"
+            style={{ left: m.x }}
+          >
+            {m.isHalf ? (
+              <div className="w-px h-2 bg-gray-200 dark:bg-gray-600 -translate-x-px" />
+            ) : (
+              <span className={cn(
+                'text-[11px] font-medium px-0.5 -translate-x-1/2',
+                m.isNoon ? 'text-blue-500 dark:text-blue-400' : 'text-gray-400 dark:text-gray-500'
+              )}>
+                {m.label}
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── TherapistRow ──────────────────────────────────────────────────────────────
+function TherapistRow({
+  therapist,
+  appts,
+  gsMin,
+  opStart,
+  opEnd,
+  geMin,
+  drag,
+  canEdit,
+  beginDrag,
+  onAppointmentClick,
+  onCellClick,
+  team,
+  rowIdx,
+}) {
+  const sorted = useMemo(
+    () => [...appts].sort((a, b) => new Date(a.startTime) - new Date(b.startTime)),
+    [appts]
+  );
+
+  const isConsecutive = (a, b) =>
+    Math.abs(toMins(b.startTime) - toMins(a.endTime)) <= CONNECT_GAP;
+
+  const totalHrs = appts.reduce(
+    (s, a) => s + (new Date(a.endTime) - new Date(a.startTime)) / 3.6e6, 0
+  );
+
+  const initials = `${therapist.firstName?.[0] || ''}${therapist.lastName?.[0] || ''}`.toUpperCase();
+
+  // Hour-grid lines (re-computed from gsMin/geMin)
+  const hourXs = useMemo(() => {
+    const xs = [];
+    for (let h = Math.floor(gsMin / 60); h <= Math.ceil(geMin / 60); h++) {
+      xs.push((h * 60 - gsMin) * PX_PER_MIN);
+    }
+    return xs;
+  }, [gsMin, geMin]);
+
+  return (
+    <div
+      className={cn(
+        'flex border-b border-gray-50 dark:border-gray-700/40',
+        rowIdx % 2 === 1 && 'bg-gray-50/40 dark:bg-gray-800/60'
+      )}
+      style={{ height: ROW_H }}
+    >
+      {/* Label */}
+      <div
+        style={{ width: LABEL_W, flexShrink: 0 }}
+        className="px-3 flex items-center gap-2.5 border-r border-gray-100 dark:border-gray-700 shrink-0"
+      >
+        <div
+          className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-bold text-white shadow-sm"
+          style={{ background: teamColor(team, 0) }}
+        >
+          {initials}
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate leading-tight">
+            {therapist.firstName} {therapist.lastName}
+          </div>
+          <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
+            {totalHrs.toFixed(1)}h · {appts.length} appt{appts.length !== 1 ? 's' : ''}
+          </div>
+        </div>
+      </div>
+
+      {/* Timeline track */}
+      <div
+        className="relative flex-1"
+        style={{ height: ROW_H }}
+        onClick={(e) => {
+          // Only fire onCellClick when clicking the bare track, not a block
+          if (e.target === e.currentTarget) {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const clickMins = gsMin + (e.clientX - rect.left) / PX_PER_MIN;
+            const snapped = snap(clickMins);
+            onCellClick({
+              therapistId: therapist.id,
+              timeSlot: `${String(Math.floor(snapped / 60)).padStart(2, '0')}:${String(snapped % 60).padStart(2, '0')}`,
+              selectedDate: team._selectedDate,
+              teamId: team.id,
+              leadBcbaId: team.LeadBCBA?.id,
+            });
+          }
+        }}
+      >
+        {/* Out-of-hours hatching */}
+        {gsMin < opStart && (
+          <div
+            className="absolute top-0 bottom-0 pointer-events-none"
+            style={{
+              left: 0,
+              width: (opStart - gsMin) * PX_PER_MIN,
+              background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
+              backgroundColor: 'rgba(0,0,0,0.04)',
+            }}
+          />
+        )}
+        {geMin > opEnd && (
+          <div
+            className="absolute top-0 bottom-0 pointer-events-none"
+            style={{
+              left: (opEnd - gsMin) * PX_PER_MIN,
+              right: 0,
+              background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
+              backgroundColor: 'rgba(0,0,0,0.04)',
+            }}
+          />
+        )}
+
+        {/* Hour grid lines */}
+        {hourXs.map((x, i) => (
+          <div
+            key={i}
+            className="absolute top-0 bottom-0 border-l border-gray-100 dark:border-gray-700/40"
+            style={{ left: x }}
+          />
+        ))}
+
+        {/* Subway track line */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+          style={{
+            left: 0, right: 0, height: 3,
+            background: teamColor(team, 0),
+            opacity: 0.2,
+          }}
+        />
+
+        {/* Appointment blocks */}
+        {sorted.map((appt, idx) => {
+          const s = toMins(appt.startTime);
+          const e = toMins(appt.endTime);
+          const x = (s - gsMin) * PX_PER_MIN;
+          const w = Math.max((e - s) * PX_PER_MIN, 6);
+
+          const prev = sorted[idx - 1];
+          const next = sorted[idx + 1];
+          const fromPrev = prev && isConsecutive(prev, appt);
+          const toNext   = next && isConsecutive(appt, next);
+          const isDragging = drag?.id === appt.id;
+
+          const sty = svcStyle(appt.serviceType);
+
+          const rOuter = '999px';
+          const rInner = '5px';
+          const borderRadius = [
+            fromPrev ? rInner : rOuter,
+            toNext   ? rInner : rOuter,
+            toNext   ? rInner : rOuter,
+            fromPrev ? rInner : rOuter,
+          ].join(' ');
+
+          const ml = fromPrev ? 1 : 0;
+          const mr = toNext   ? 1 : 0;
+
+          const patientName = appt.patient?.decryptedFirstName
+            || appt.patient?.firstName
+            || null;
+
+          const tooltipText = `${fmt12(appt.startTime)} – ${fmt12(appt.endTime)} · ${sty.label}${patientName ? ' · ' + patientName : ''}`;
 
           return (
             <div
-              key={team.id}
-              className="border dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 shadow-sm"
+              key={appt.id}
+              className={cn(
+                'absolute flex items-center overflow-visible',
+                isDragging
+                  ? 'cursor-grabbing z-30 shadow-xl'
+                  : canEdit
+                    ? 'cursor-grab z-10 hover:z-20 hover:shadow-md'
+                    : 'cursor-pointer z-10 hover:z-20 hover:shadow-md'
+              )}
+              style={{
+                top: 9, bottom: 9,
+                left: x + ml,
+                width: Math.max(w - ml - mr, 6),
+                background:   sty.bg,
+                border:       `2px solid ${sty.border}`,
+                borderRadius,
+                opacity: isDragging ? 0.75 : 1,
+                boxShadow: isDragging
+                  ? `0 8px 24px ${sty.solid}40`
+                  : `0 1px 3px ${sty.solid}20`,
+                transition: isDragging ? 'none' : 'box-shadow 0.15s, opacity 0.1s',
+              }}
+              onMouseDown={canEdit ? (e) => beginDrag(e, appt, 'move') : undefined}
+              onClick={(e) => { e.stopPropagation(); if (!drag) onAppointmentClick(appt); }}
+              title={tooltipText}
             >
-              {/* Team Header */}
-              <div
-                className="bg-blue-50 dark:bg-blue-900/20 p-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer"
-                onClick={() => toggleTeam(team.id)}
-              >
-                <div>
-                  <h3 className="font-bold text-lg text-blue-900 dark:text-blue-100">
-                    TEAM {team.LeadBCBA?.firstName || team.name || team.id}
-                  </h3>
-                  <p className="text-sm text-blue-700 dark:text-blue-300">
-                    Lead:{" "}
-                    {team.LeadBCBA
-                      ? `${team.LeadBCBA.firstName} ${team.LeadBCBA.lastName}`
-                      : "Unassigned"}
-                  </p>
+              {/* Service-type abbreviation badge */}
+              {w > 32 && (
+                <div
+                  className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold ml-1.5"
+                  style={{ background: sty.border, color: '#fff' }}
+                >
+                  {sty.label.slice(0, 3).toUpperCase()}
                 </div>
-                <Button variant="ghost" size="sm">
-                  {isExpanded ? "Collapse" : "Expand"}
-                </Button>
-              </div>
+              )}
 
-              {isExpanded && (
-                <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
-                  <div className="min-w-[800px]">
-                    {/* Header rows with day, date, and therapist names */}
-                    <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 text-gray-700 dark:text-gray-300">
-                      <div className="p-2 font-medium border-r border-b dark:border-gray-700 text-center text-gray-700 dark:text-gray-300">
-                        {formatDayOfWeek(selectedDate)}
-                      </div>
-
-                      {/* BCBA header row */}
-                      <div
-                        className="p-2 font-medium border-r border-b dark:border-gray-700 text-right pr-5 text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-800"
-                        style={{ gridColumn: `span ${team.Members?.length || 1}` }}
-                      >
-                        {team.LeadBCBA?.firstName || ""} (BCBA)
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700 text-gray-700 dark:text-gray-300">
-                      <div className="p-2 font-medium border-r dark:border-gray-700 text-center text-gray-700 dark:text-gray-300">
-                        {formatDayOfMonth(selectedDate)}
-                      </div>
-
-                      {team.Members?.map((member) => (
-                        <div
-                          key={member.id}
-                          className="p-2 font-medium border-r dark:border-gray-700 text-center text-gray-700 dark:text-gray-300"
-                        >
-                          {member.firstName}
-                        </div>
-                      ))}
-                    </div>
-
-                    {/* Time slots */}
-                    {TIME_SLOTS.map((timeSlot, slotIdx) => (
-                      <div
-                        key={timeSlot}
-                        className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b dark:border-gray-700"
-                      >
-                        {/* Time column */}
-                        <div className="h-[40px] flex items-center justify-center text-sm border-r dark:border-gray-700 font-medium text-gray-600 dark:text-gray-400">
-                          {timeSlot}
-                        </div>
-
-                        {/* Therapist columns */}
-                        {team.Members?.map((member) => {
-                          const therapistGroups = getTherapistAppointments(
-                            member.id,
-                          );
-                          const groupInfo = getGroupForSlot(therapistGroups, slotIdx);
-                          const dropId = `drop-${team.id}-${member.id}-${slotIdx}`;
-
-                          return (
-                            <Droppable
-                              key={dropId}
-                              droppableId={dropId}
-                              type="appointment"
-                            >
-                              {(provided, snapshot) => (
-                                <div
-                                  ref={provided.innerRef}
-                                  {...provided.droppableProps}
-                                  className={cn(
-                                    "border-r dark:border-gray-700 h-[40px] relative overflow-visible",
-                                    snapshot.isDraggingOver &&
-                                      "bg-blue-50 dark:bg-blue-900/20",
-                                  )}
-                                >
-                                  {/* Render empty cell if no appointment */}
-                                  {!groupInfo && (
-                                    <div
-                                      className="h-full hover:bg-blue-50 dark:hover:bg-blue-900/20 cursor-pointer"
-                                      onClick={() =>
-                                        onCellClick({
-                                          therapistId: member.id,
-                                          timeSlot: TIME_SLOTS[i],
-                                          selectedDate,
-                                          teamId: team.id,
-                                          leadBcbaId: team.LeadBCBA?.id,
-                                        })
-                                      }
-                                    >
-                                      <div className="flex items-center justify-center h-full opacity-0 hover:opacity-100 transition-opacity">
-                                        <Plus className="h-3 w-3 text-gray-400" />
-                                      </div>
-                                    </div>
-                                  )}
-
-                                  {/* Only render the appointment block at its starting slot */}
-                                  {groupInfo && groupInfo.isStart && (
-                                    <Draggable
-                                      draggableId={groupInfo.group.id}
-                                      index={i}
-                                    >
-                                      {(provided, snapshot) => {
-                                        // Calculate offset for appointments that don't start on slot boundaries
-                                        const appointmentStart = new Date(groupInfo.group.startTime);
-                                        const startMinutes = appointmentStart.getMinutes();
-                                        const slotRange = TIME_SLOT_RANGES[TIME_SLOTS[i]];
-                                        let topOffset = 0;
-                                        
-                                        if (slotRange) {
-                                          // Calculate how many minutes into the slot this appointment starts
-                                          const slotStartMinutes = slotRange.start % 60;
-                                          const minutesIntoSlot = startMinutes - slotStartMinutes;
-                                          
-                                          // Convert to pixels (40px per 30 minutes)
-                                          if (minutesIntoSlot > 0) {
-                                            topOffset = (minutesIntoSlot / 30) * 40;
-                                          }
-                                        }
-                                        
-                                        return (
-                                          <div
-                                            ref={provided.innerRef}
-                                            {...provided.draggableProps}
-                                            {...provided.dragHandleProps}
-                                            style={{
-                                              ...provided.draggableProps.style,
-                                              position: "absolute",
-                                              top: topOffset,
-                                              width: "100%",
-                                              zIndex: snapshot.isDragging
-                                                ? 999
-                                                : 1,
-                                            }}
-                                          >
-                                          <ResizableAppointment
-                                            group={groupInfo.group}
-                                            serviceType={getAppointmentServiceType(
-                                              groupInfo.group,
-                                            )}
-                                            serviceTypeColors={
-                                              SERVICE_TYPE_COLORS
-                                            }
-                                            formatPatientName={
-                                              formatPatientName
-                                            }
-                                            formatFullPatientName={
-                                              formatFullPatientName
-                                            }
-                                            formatTime={formatTime}
-                                            onResize={handleAppointmentResize}
-                                            onAppointmentClick={
-                                              onAppointmentClick
-                                            }
-                                            checkAvailability={
-                                              checkAvailability
-                                            }
-                                            slotHeight={40}
-                                          >
-                                            <div className="font-medium">
-                                              <span>
-                                                {formatPatientName(
-                                                  groupInfo.group.patient,
-                                                  groupInfo.group.appointments[0]
-                                                )}
-                                              </span>
-                                            </div>
-                                            {groupInfo.totalSpan > 2 && (
-                                              <div className="text-xs opacity-75 mt-1">
-                                                {formatTime(
-                                                  groupInfo.group.startTime,
-                                                )}{" "}
-                                                -{" "}
-                                                {formatTime(
-                                                  groupInfo.group.endTime,
-                                                )}
-                                              </div>
-                                            )}
-                                            {groupInfo.group.appointments
-                                              .length > 1 && (
-                                              <div className="text-xs opacity-60">
-                                                {
-                                                  groupInfo.group.appointments
-                                                    .length
-                                                }{" "}
-                                                sessions
-                                              </div>
-                                            )}
-                                          </ResizableAppointment>
-                                        </div>
-                                        );
-                                      }}
-                                    </Draggable>
-                                  )}
-
-                                  {/* Placeholder for non-starting slots of multi-slot appointments */}
-                                  {groupInfo && !groupInfo.isStart && (
-                                    <div className="h-full" />
-                                  )}
-
-                                  {provided.placeholder}
-                                </div>
-                              )}
-                            </Droppable>
-                          );
-                        })}
-                      </div>
-                    ))}
+              {/* Patient name / label */}
+              {w > 60 && (
+                <div
+                  className="flex-1 px-1.5 min-w-0 leading-tight"
+                  style={{ color: sty.text }}
+                >
+                  <div className="text-[11px] font-semibold truncate">
+                    {patientName || sty.label}
                   </div>
-
-                  {/* List of today's appointments for this team */}
-                  <div className="p-4 border-t dark:border-gray-700">
-                    <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase mb-3">
-                      Appointments for{" "}
-                      {format(new Date(selectedDate), "MMMM d, yyyy")}
-                    </h4>
-
-                    <div className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg">
-                      {(() => {
-                        // Collect all appointment groups for the team
-                        const allGroups =
-                          team.Members?.flatMap((member) => {
-                            const therapistGroups = getTherapistAppointments(
-                              member.id,
-                            );
-                            return therapistGroups.map((group) => ({
-                              ...group,
-                              therapistName: `${member.firstName} ${member.lastName}`,
-                            }));
-                          }) || [];
-
-                        // Sort groups by start time
-                        const sortedGroups = allGroups.sort((a, b) => {
-                          return new Date(a.startTime) - new Date(b.startTime);
-                        });
-
-                        // Render sorted groups
-                        return sortedGroups.length > 0 ? (
-                          sortedGroups.map((group) => (
-                            <div
-                              key={group.id}
-                              className="p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
-                              onClick={() =>
-                                handleAppointmentClick(group.appointments[0])
-                              }
-                            >
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <div className="font-medium">
-                                    <span
-                                      title={formatFullPatientName(
-                                        group.patient,
-                                        group.appointments[0]
-                                      )}
-                                      className="cursor-help"
-                                    >
-                                      {formatPatientName(group.patient, group.appointments[0])}
-                                    </span>
-                                    {group.appointments.length > 1 && (
-                                      <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">
-                                        {group.appointments.length} sessions
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                                    with {group.therapistName}
-                                  </div>
-                                </div>
-                                <div
-                                  className={cn(
-                                    "text-xs px-2 py-1 rounded-full",
-                                    SERVICE_TYPE_COLORS[
-                                      getAppointmentServiceType(group) ||
-                                        "direct"
-                                    ],
-                                  )}
-                                >
-                                  {group.serviceType ||
-                                    getAppointmentServiceType(group) ||
-                                    "Session"}
-                                </div>
-                              </div>
-
-                              <div className="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                                <Clock className="h-4 w-4 mr-1" />
-                                <span>
-                                  {formatTime(group.startTime)} -{" "}
-                                  {formatTime(group.endTime)}
-                                </span>
-                                {group.totalDuration && (
-                                  <span className="ml-2">
-                                    ({group.totalDuration} mins)
-                                  </span>
-                                )}
-                              </div>
-
-                              {group.location && (
-                                <div className="mt-1 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                                  <MapPin className="h-4 w-4 mr-1" />
-                                  <span>{group.location.name}</span>
-                                </div>
-                              )}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                            No appointments scheduled for this team today
-                          </div>
-                        );
-                      })()}
+                  {w > 100 && (
+                    <div className="text-[10px] opacity-70 truncate">
+                      {fmtDur(appt.startTime, appt.endTime)}
                     </div>
-                  </div>
+                  )}
+                </div>
+              )}
+
+              {/* Resize handle (right edge) */}
+              {canEdit && (
+                <div
+                  className="absolute right-0 top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize group/rz flex-shrink-0 rounded-r-full"
+                  onMouseDown={(e) => { e.stopPropagation(); beginDrag(e, appt, 'resize'); }}
+                  title="Drag to resize"
+                >
+                  <div
+                    className="w-0.5 h-4 rounded-full opacity-0 group-hover/rz:opacity-50 transition-opacity"
+                    style={{ background: sty.text }}
+                  />
                 </div>
               )}
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
 
-        {/* Appointment Details Modal */}
-        {selectedAppointment && (
-          <div className="fixed inset-0 z-50 bg-black bg-opacity-50 flex items-center justify-center p-4">
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full p-6">
-              <div className="flex justify-between items-start mb-4">
-                <h2 className="text-xl font-bold">Appointment Details</h2>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={closeAppointmentDetails}
-                >
-                  ✕
-                </Button>
-              </div>
+// ─── TeamSection ──────────────────────────────────────────────────────────────
+function TeamSection({
+  team,
+  teamIdx,
+  todayAppts,
+  gsMin,
+  geMin,
+  opStart,
+  opEnd,
+  gridW,
+  collapsed,
+  onToggle,
+  drag,
+  canEdit,
+  beginDrag,
+  onAppointmentClick,
+  onCellClick,
+  selectedDate,
+}) {
+  const color = team.color || TEAM_COLORS[teamIdx % TEAM_COLORS.length];
 
-              <div className="space-y-4">
-                <div>
-                  <h3 className="font-medium text-gray-700 dark:text-gray-300">
-                    Patient
-                  </h3>
-                  <p className="text-lg">
-                    {formatFullPatientName(selectedAppointment.patient)}
-                  </p>
-                </div>
+  // Build per-therapist appointment lists
+  const memberRows = useMemo(() => {
+    const members = team.Members || [];
+    return members.map((member) => {
+      const appts = todayAppts.filter((a) => a.therapistId === member.id);
+      return { therapist: member, appts };
+    });
+  }, [team.Members, todayAppts]);
 
-                <div>
-                  <h3 className="font-medium text-gray-700 dark:text-gray-300">
-                    Time
-                  </h3>
-                  <p>
-                    {format(new Date(selectedAppointment.startTime), "PPPP")}
-                  </p>
-                  <p>
-                    {formatTime(selectedAppointment.startTime)} -{" "}
-                    {formatTime(selectedAppointment.endTime)}
-                  </p>
-                </div>
+  const teamHrs = useMemo(() =>
+    memberRows.reduce(
+      (s, { appts }) =>
+        s + appts.reduce((ss, a) => ss + (new Date(a.endTime) - new Date(a.startTime)) / 3.6e6, 0),
+      0
+    ),
+    [memberRows]
+  );
 
-                {selectedAppointment.location && (
-                  <div>
-                    <h3 className="font-medium text-gray-700 dark:text-gray-300">
-                      Location
-                    </h3>
-                    <p>{selectedAppointment.location.name}</p>
-                  </div>
-                )}
+  const teamApptCount = useMemo(
+    () => memberRows.reduce((s, { appts }) => s + appts.length, 0),
+    [memberRows]
+  );
 
-                <div>
-                  <h3 className="font-medium text-gray-700 dark:text-gray-300">
-                    Service Type
-                  </h3>
-                  <div
-                    className={cn(
-                      "inline-block px-2 py-1 rounded-full text-sm",
-                      SERVICE_TYPE_COLORS[
-                        getAppointmentServiceType(selectedAppointment) ||
-                          "direct"
-                      ],
-                    )}
-                  >
-                    {selectedAppointment.serviceType ||
-                      getAppointmentServiceType(selectedAppointment) ||
-                      "Direct Service"}
-                  </div>
-                </div>
+  // Pass selectedDate down through team object so TherapistRow can use it
+  const teamWithDate = useMemo(() => ({ ...team, _selectedDate: selectedDate }), [team, selectedDate]);
 
-                <div>
-                  <h3 className="font-medium text-gray-700 dark:text-gray-300">
-                    Status
-                  </h3>
-                  <div className="inline-block px-2 py-1 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100 text-sm">
-                    {selectedAppointment.status || "Scheduled"}
-                  </div>
-                </div>
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
 
-                {selectedAppointment.notes && (
-                  <div>
-                    <h3 className="font-medium text-gray-700 dark:text-gray-300">
-                      Notes
-                    </h3>
-                    <p className="text-gray-600 dark:text-gray-400">
-                      {selectedAppointment.notes}
-                    </p>
-                  </div>
-                )}
+      {/* ── Team header ─────────────────────────────────────────────────────── */}
+      <div
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700/40 transition-colors"
+        onClick={onToggle}
+      >
+        {/* Color dot */}
+        <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: color }} />
 
-                <div className="flex justify-end pt-4">
-                  <Button onClick={closeAppointmentDetails}>Close</Button>
-                </div>
-              </div>
-            </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-gray-900 dark:text-white text-sm">
+              {team.name || `Team ${teamIdx + 1}`}
+            </span>
+            {team.LeadBCBA && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                Lead: {team.LeadBCBA.firstName} {team.LeadBCBA.lastName}
+              </span>
+            )}
           </div>
+        </div>
+
+        {/* Stats chips */}
+        <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
+          <span>{(team.Members || []).length} therapist{(team.Members || []).length !== 1 ? 's' : ''}</span>
+          <span>{teamApptCount} appt{teamApptCount !== 1 ? 's' : ''}</span>
+          <span>{teamHrs.toFixed(1)}h</span>
+        </div>
+
+        {/* Chevron */}
+        {collapsed
+          ? <ChevronRight className="h-4 w-4 text-gray-400 flex-shrink-0" />
+          : <ChevronDown  className="h-4 w-4 text-gray-400 flex-shrink-0" />
+        }
+      </div>
+
+      {/* ── Timeline body ────────────────────────────────────────────────────── */}
+      {!collapsed && (
+        <div className="overflow-x-auto">
+          <div className="relative" style={{ minWidth: LABEL_W + gridW + 32 }}>
+
+            {/* Time ruler */}
+            <HourHeader
+              gsMin={gsMin}
+              geMin={geMin}
+              opStart={opStart}
+              opEnd={opEnd}
+              gridW={gridW}
+            />
+
+            {/* Therapist rows */}
+            {memberRows.length === 0 ? (
+              <div className="flex items-center justify-center h-14 text-xs text-gray-400 dark:text-gray-500">
+                No therapists in this team
+              </div>
+            ) : (
+              memberRows.map(({ therapist, appts }, rowIdx) => (
+                <TherapistRow
+                  key={therapist.id}
+                  therapist={therapist}
+                  appts={appts}
+                  gsMin={gsMin}
+                  opStart={opStart}
+                  opEnd={opEnd}
+                  geMin={geMin}
+                  drag={drag}
+                  canEdit={canEdit}
+                  beginDrag={beginDrag}
+                  onAppointmentClick={onAppointmentClick}
+                  onCellClick={onCellClick}
+                  team={teamWithDate}
+                  rowIdx={rowIdx}
+                />
+              ))
+            )}
+
+            <div className="h-2" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Root component ───────────────────────────────────────────────────────────
+export default function TeamScheduleView({
+  teams            = [],
+  appointments     = [],
+  therapists       = [],
+  patients         = [],
+  selectedDate,
+  locations        = [],
+  selectedLocation = null,
+  userRole         = 'therapist',
+  canEdit          = false,
+  onAppointmentClick  = () => {},
+  onCellClick         = () => {},
+  onAppointmentUpdate = () => {},
+}) {
+  const [localAppts,    setLocalAppts]    = useState(appointments);
+  const [history,       setHistory]       = useState([]);
+  const [drag,          setDrag]          = useState(null);
+  const [tooltip,       setTooltip]       = useState(null);
+  const [conflictState, setConflictState] = useState(null);
+  // Collapsed state keyed by team.id; default all expanded
+  const [collapsed,  setCollapsed]  = useState(() => {
+    if (teams.length > 3) {
+      // Collapse all but the first when there are many teams
+      return teams.slice(1).reduce((acc, t) => ({ ...acc, [t.id]: true }), {});
+    }
+    return {};
+  });
+
+  useEffect(() => { setLocalAppts(appointments); }, [appointments]);
+
+  // ── Today filter ──
+  const todayAppts = useMemo(() =>
+    localAppts.filter(
+      (a) => a?.startTime && isSameDay(new Date(a.startTime), new Date(selectedDate))
+    ),
+    [localAppts, selectedDate]
+  );
+
+  // ── Operating hours from selected location ──
+  const { opStart, opEnd } = useMemo(() => {
+    const loc = locations.find((l) => String(l.id) === String(selectedLocation)) || locations[0];
+    return {
+      opStart: parseHHMM(loc?.workingHoursStart, 7 * 60 + 30),
+      opEnd:   parseHHMM(loc?.workingHoursEnd,   17 * 60 + 30),
+    };
+  }, [locations, selectedLocation]);
+
+  // ── Grid bounds: expand to contain any out-of-hours appointments ──
+  const { gsMin, geMin } = useMemo(() => {
+    if (!todayAppts.length) return { gsMin: opStart, geMin: opEnd };
+    const mins = todayAppts.flatMap((a) => [toMins(a.startTime), toMins(a.endTime)]);
+    return {
+      gsMin: Math.min(opStart, Math.min(...mins) - 15),
+      geMin: Math.max(opEnd,   Math.max(...mins) + 15),
+    };
+  }, [todayAppts, opStart, opEnd]);
+
+  const gridW = (geMin - gsMin) * PX_PER_MIN;
+
+  // ── Drag handlers ──
+  const onMouseMove = useCallback((e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.mouseX0;
+    const dm = snap(dx / PX_PER_MIN);
+
+    setLocalAppts((prev) => prev.map((a) => {
+      if (a.id !== drag.id) return a;
+      const base = new Date(a.startTime);
+
+      if (drag.type === 'move') {
+        const ns = Math.max(gsMin, drag.s0 + dm);
+        const dur = drag.e0 - drag.s0;
+        const ne = ns + dur;
+        const d1 = new Date(base); d1.setHours(Math.floor(ns / 60), ns % 60, 0, 0);
+        const d2 = new Date(base); d2.setHours(Math.floor(ne / 60), ne % 60, 0, 0);
+        setTooltip({ text: `${fmt12(d1.toISOString())} – ${fmt12(d2.toISOString())}` });
+        return { ...a, startTime: d1.toISOString(), endTime: d2.toISOString() };
+      } else {
+        const ne = Math.max(drag.s0 + SNAP, drag.e0 + dm);
+        const d2 = new Date(base); d2.setHours(Math.floor(ne / 60), ne % 60, 0, 0);
+        setTooltip({ text: `End: ${fmt12(d2.toISOString())} (${fmtDur(a.startTime, d2.toISOString())})` });
+        return { ...a, endTime: d2.toISOString() };
+      }
+    }));
+  }, [drag, gsMin]);
+
+  const onMouseUp = useCallback(() => {
+    if (!drag) return;
+    const updated = localAppts.find((a) => a.id === drag.id);
+    if (updated && (updated.startTime !== drag.origStart || updated.endTime !== drag.origEnd)) {
+      const conflicts = findConflicts(updated, localAppts);
+      if (conflicts.length > 0) {
+        setLocalAppts(prev => prev.map(a =>
+          a.id === drag.id ? { ...a, startTime: drag.origStart, endTime: drag.origEnd } : a
+        ));
+        setConflictState({
+          movedAppt: updated,
+          conflicts,
+          originalTimes: { startTime: drag.origStart, endTime: drag.origEnd },
+        });
+      } else {
+        setHistory((h) => [...h.slice(-19), { id: drag.id, startTime: drag.origStart, endTime: drag.origEnd }]);
+        onAppointmentUpdate(updated);
+      }
+    }
+    setDrag(null);
+    setTooltip(null);
+  }, [drag, localAppts, onAppointmentUpdate]);
+
+  useEffect(() => {
+    if (!drag) return;
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup',   onMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup',   onMouseUp);
+    };
+  }, [drag, onMouseMove, onMouseUp]);
+
+  const beginDrag = useCallback((e, appt, type) => {
+    if (!canEdit) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDrag({
+      type,
+      id:        appt.id,
+      mouseX0:   e.clientX,
+      s0:        toMins(appt.startTime),
+      e0:        toMins(appt.endTime),
+      origStart: appt.startTime,
+      origEnd:   appt.endTime,
+    });
+  }, [canEdit]);
+
+  // ── Undo ──
+  const undo = useCallback(() => {
+    if (!history.length) return;
+    const last = history[history.length - 1];
+    setHistory((h) => h.slice(0, -1));
+    setLocalAppts((prev) =>
+      prev.map((a) => a.id === last.id ? { ...a, startTime: last.startTime, endTime: last.endTime } : a)
+    );
+    const full = localAppts.find((a) => a.id === last.id);
+    if (full) onAppointmentUpdate({ ...full, startTime: last.startTime, endTime: last.endTime });
+  }, [history, localAppts, onAppointmentUpdate]);
+
+  const toggleCollapsed = useCallback((teamId) => {
+    setCollapsed((prev) => ({ ...prev, [teamId]: !prev[teamId] }));
+  }, []);
+
+  // ── Stats bar ──
+  const totalAppts = todayAppts.length;
+  const totalHrs = todayAppts.reduce(
+    (s, a) => s + (new Date(a.endTime) - new Date(a.startTime)) / 3.6e6, 0
+  );
+
+  // ── Empty state ──
+  if (teams.length === 0 && todayAppts.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-gray-400 dark:text-gray-500">
+        <Users className="h-12 w-12 mb-4 opacity-30" />
+        <p className="text-lg font-medium">No teams or appointments for {format(new Date(selectedDate), 'EEEE, MMMM d')}</p>
+        <p className="text-sm mt-1 opacity-70">Create teams and add appointments to see the schedule here.</p>
+      </div>
+    );
+  }
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-3 select-none">
+
+      {/* ── Stats bar ───────────────────────────────────────────────────────── */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm px-4 py-3 flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h3 className="font-semibold text-gray-900 dark:text-white text-sm">
+            {format(new Date(selectedDate), 'EEEE, MMMM d')} — Team Schedule
+          </h3>
+          {canEdit && (
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+              Drag to reschedule · Drag right edge to resize
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center gap-5">
+          <div className="text-center">
+            <div className="text-xl font-bold tabular-nums text-gray-900 dark:text-white">{teams.length}</div>
+            <div className="text-[11px] text-gray-400">team{teams.length !== 1 ? 's' : ''}</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xl font-bold tabular-nums text-gray-900 dark:text-white">{totalAppts}</div>
+            <div className="text-[11px] text-gray-400">appointment{totalAppts !== 1 ? 's' : ''}</div>
+          </div>
+          <div className="text-center">
+            <div className="text-xl font-bold tabular-nums text-gray-900 dark:text-white">{totalHrs.toFixed(1)}h</div>
+            <div className="text-[11px] text-gray-400">total hours</div>
+          </div>
+          {history.length > 0 && (
+            <Button variant="outline" size="sm" onClick={undo} className="flex items-center gap-1.5 text-xs">
+              <Undo2 className="h-3.5 w-3.5" />
+              Undo
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* ── Drag tooltip (floats near top of viewport) ─────────────────────── */}
+      {tooltip && (
+        <div className="sticky top-2 z-50 flex justify-center pointer-events-none">
+          <div className="bg-gray-900/90 text-white text-xs px-3 py-1.5 rounded-full shadow-lg">
+            {tooltip.text}
+          </div>
+        </div>
+      )}
+
+      {/* ── Team sections ────────────────────────────────────────────────────── */}
+      {teams.map((team, teamIdx) => (
+        <TeamSection
+          key={team.id}
+          team={team}
+          teamIdx={teamIdx}
+          todayAppts={todayAppts}
+          gsMin={gsMin}
+          geMin={geMin}
+          opStart={opStart}
+          opEnd={opEnd}
+          gridW={gridW}
+          collapsed={!!collapsed[team.id]}
+          onToggle={() => toggleCollapsed(team.id)}
+          drag={drag}
+          canEdit={canEdit}
+          beginDrag={beginDrag}
+          onAppointmentClick={onAppointmentClick}
+          onCellClick={onCellClick}
+          selectedDate={selectedDate}
+        />
+      ))}
+
+      {/* ── Legend ──────────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-gray-400 dark:text-gray-500 px-1 pb-2">
+        {Object.values(SVC).map((s) => (
+          <span key={s.label} className="flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: s.solid }} />
+            {s.label}
+          </span>
+        ))}
+        {canEdit && (
+          <>
+            <span className="ml-4">⟵ drag block to move</span>
+            <span>drag ▕ right edge to resize</span>
+          </>
         )}
       </div>
-    </DragDropContext>
+
+      {conflictState && (
+        <ConflictModal
+          movedAppt={conflictState.movedAppt}
+          originalTimes={conflictState.originalTimes}
+          conflicts={conflictState.conflicts}
+          allTodayAppts={todayAppts}
+          opStart={opStart}
+          opEnd={opEnd}
+          therapists={therapists}
+          patients={patients}
+          onConfirm={(resolvedAppts) => {
+            setLocalAppts(prev => {
+              let next = [...prev];
+              for (const a of resolvedAppts) next = next.map(x => x.id === a.id ? a : x);
+              return next;
+            });
+            for (const appt of resolvedAppts) onAppointmentUpdate(appt);
+            setConflictState(null);
+          }}
+          onCancel={() => setConflictState(null)}
+        />
+      )}
+    </div>
   );
 }

@@ -1,852 +1,903 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { format, parseISO, isSameDay, isValid, addDays, addMinutes } from 'date-fns';
-import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
-import { 
-  Clock, 
-  MapPin, 
-  User, 
-  Calendar, 
-  Search, 
-  Filter, 
-  ChevronDown,
-  Settings,
-  Eye 
-} from 'lucide-react';
+import {
+  useState,
+  useMemo,
+  useEffect,
+  useCallback,
+  useRef,
+  Fragment,
+} from 'react';
+import { format, isSameDay } from 'date-fns';
 import { cn } from '../../lib/utils';
+import { Search, Undo2, X, ShieldCheck } from 'lucide-react';
 import { Button } from '../ui/button';
-import { Input } from '../../components/ui/input';
-import { groupConsecutiveAppointments, getSpannedTimeSlots, getGroupPositionInSlot } from '../../utils/appointment-grouping';
-import { getLocationTimeSlots, getMostCommonLocation } from '../../utils/location-time-slots';
-import { getAppointmentType, requiresPatient } from '../../utils/appointmentTypes';
+import ConflictModal, { findConflicts } from './ConflictModal';
 
-// Colors for different service types
-const SERVICE_TYPE_COLORS = {
-  direct: 'bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200',
-  indirect: 'bg-gray-100 dark:bg-gray-800/40 text-gray-800 dark:text-gray-200',
-  supervision: 'bg-purple-100 dark:bg-purple-900/20 text-purple-800 dark:text-purple-200',
-  noOw: 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-200',
-  lunch: 'bg-green-100 dark:bg-green-900/20 text-green-800 dark:text-green-200',
-  circle: 'bg-yellow-100 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200',
-  cleaning: 'bg-orange-100 dark:bg-orange-900/20 text-orange-800 dark:text-orange-200',
-  default: 'bg-blue-100 dark:bg-blue-900/20 text-blue-800 dark:text-blue-200',
-  uncovered: 'bg-red-500 dark:bg-red-600 text-white animate-pulse',
+// ─── Layout constants (match UnifiedScheduleView) ─────────────────────────────
+const PX_PER_MIN  = 2.2;
+const ROW_H       = 58;
+const LABEL_W     = 200;
+const SNAP        = 15;
+const CONNECT_GAP = 4;
+
+// ─── Service type palette ──────────────────────────────────────────────────────
+const SVC = {
+  direct:      { bg: '#EFF6FF', border: '#3B82F6', solid: '#3B82F6', text: '#1D4ED8', label: 'Direct' },
+  circle:      { bg: '#FDF2F8', border: '#EC4899', solid: '#EC4899', text: '#9D174D', label: 'Circle' },
+  indirect:    { bg: '#F3F4F6', border: '#9CA3AF', solid: '#6B7280', text: '#374151', label: 'Indirect' },
+  supervision: { bg: '#F5F3FF', border: '#8B5CF6', solid: '#8B5CF6', text: '#5B21B6', label: 'Supervision' },
+  lunch:       { bg: '#ECFDF5', border: '#10B981', solid: '#10B981', text: '#065F46', label: 'Lunch' },
+  cleaning:    { bg: '#FFF7ED', border: '#F97316', solid: '#F97316', text: '#C2410C', label: 'Cleaning' },
 };
 
-// Get dynamic time slots based on appointments (fallback function)
-const getTimeSlots = (appointments, defaultStartHour = 7, defaultEndHour = 18) => {
-  if (!appointments || appointments.length === 0) {
-    // Default time slots if no appointments
-    return Array.from({ length: (defaultEndHour - defaultStartHour) * 2 }, (_, i) => {
-      const hour = Math.floor(i / 2) + defaultStartHour;
-      const minute = (i % 2) * 30;
-      return `${hour}:${minute === 0 ? '00' : minute}-${hour}:${minute === 0 ? '30' : '00'}`;
-    });
-  }
+const SVC_DEFAULT = { bg: '#EFF6FF', border: '#3B82F6', solid: '#3B82F6', text: '#1D4ED8', label: 'Session' };
 
-  // Find earliest and latest appointment times
-  const times = appointments.flatMap(app => {
-    if (!app.startTime || !app.endTime) return [];
-    const start = new Date(app.startTime);
-    const end = new Date(app.endTime);
-    return [start, end];
-  }).filter(date => isValid(date));
+const svcOf = (type) => SVC[type] || SVC_DEFAULT;
 
-  if (times.length === 0) {
-    return Array.from({ length: (defaultEndHour - defaultStartHour) * 2 }, (_, i) => {
-      const hour = Math.floor(i / 2) + defaultStartHour;
-      const minute = (i % 2) * 30;
-      return `${hour}:${minute === 0 ? '00' : minute}-${hour}:${minute === 0 ? '30' : '00'}`;
-    });
-  }
+// ─── Team color palette ────────────────────────────────────────────────────────
+const TEAM_COLORS = [
+  '#3B82F6', '#10B981', '#F59E0B', '#8B5CF6',
+  '#EC4899', '#14B8A6', '#F97316', '#6366F1',
+];
 
-  const minTime = new Date(Math.min(...times.map(t => t.getTime())));
-  const maxTime = new Date(Math.max(...times.map(t => t.getTime())));
-
-  // Round down to nearest half hour for start
-  let startHour = minTime.getHours();
-  let startMinute = minTime.getMinutes() < 30 ? 0 : 30;
-  if (startHour > defaultStartHour || (startHour === defaultStartHour && startMinute > 0)) {
-    startHour = defaultStartHour;
-    startMinute = 0;
-  }
-
-  // Round up to nearest half hour for end
-  let endHour = maxTime.getHours();
-  let endMinute = maxTime.getMinutes() > 0 ? 30 : 0;
-  if (endHour < defaultEndHour) {
-    endHour = defaultEndHour;
-    endMinute = 0;
-  } else if (endMinute === 30) {
-    endHour += 1;
-    endMinute = 0;
-  }
-
-  const slots = [];
-  let currentHour = startHour;
-  let currentMinute = startMinute;
-
-  while (currentHour < endHour || (currentHour === endHour && currentMinute <= endMinute)) {
-    const nextMinute = currentMinute === 0 ? 30 : 0;
-    const nextHour = currentMinute === 0 ? currentHour : currentHour + 1;
-    
-    slots.push(`${currentHour}:${currentMinute === 0 ? '00' : currentMinute}-${nextHour}:${nextMinute === 0 ? '00' : nextMinute}`);
-    
-    currentMinute = nextMinute;
-    currentHour = nextHour;
-  }
-
-  return slots;
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const toMins = (iso) => {
+  const d = new Date(iso);
+  return d.getHours() * 60 + d.getMinutes();
 };
 
-// Create a map of time slots to their hour/minute values
-const createTimeSlotMap = (timeSlots) => {
-  const map = {};
-  
-  timeSlots.forEach(slot => {
-    const [start, end] = slot.split('-');
-    const [startHour, startMinute] = start.split(':').map(Number);
-    const [endHour, endMinute] = end.split(':').map(Number);
-    
-    map[slot] = [
-      startHour + (startMinute / 60),
-      endHour + (endMinute / 60)
-    ];
-  });
-  
-  return map;
-};
+const snapMin = (m) => Math.round(m / SNAP) * SNAP;
 
-// Format a time string for display
-const formatDisplayTime = (timeStr) => {
-  const [hour, minute] = timeStr.split(':').map(Number);
-  const period = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour % 12 || 12;
-  return `${displayHour}:${minute === 0 ? '00' : minute} ${period}`;
-};
+function fmt12(iso) {
+  const d = new Date(iso);
+  const h = d.getHours(), m = d.getMinutes();
+  const p = h >= 12 ? 'PM' : 'AM';
+  const hd = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${hd}:${String(m).padStart(2, '0')} ${p}`;
+}
 
-export default function EnhancedScheduleView(props) { 
-  const { 
-    teams, 
-    appointments = [], 
-    selectedDate,
-    onAppointmentUpdate = () => {},
-    onAppointmentClick = () => {},
-    showLocationView = false,
-    userRole = null, // Add userRole prop to determine name display format
-    location = null // Add location prop for location-specific time slots
-  } = props;
-  const [expandedTeams, setExpandedTeams] = useState({});
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showFilters, setShowFilters] = useState(false);
-  const [selectedServiceType, setSelectedServiceType] = useState('');
-  const [selectedTherapist, setSelectedTherapist] = useState('');
-  const [selectedPatient, setSelectedPatient] = useState('');
-  
-  // Determine if we should use HIPAA-compliant names based on user role
-  // Therapists see abbreviated names, BCBA/Admin see full names
-  const useHipaaNames = userRole === 'therapist';
-  const [showNameToggle, setShowNameToggle] = useState(false); // Allow manual toggle for BCBA/Admin only
+function fmtDur(iso1, iso2) {
+  const mins = (new Date(iso2) - new Date(iso1)) / 60000;
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60), r = mins % 60;
+  return r ? `${h}h ${r}m` : `${h}h`;
+}
 
-  // Get appointments for selected date
-  const todaysAppointments = useMemo(() => {
-    return appointments.filter(app => 
-      app && app.startTime && isSameDay(new Date(app.startTime), new Date(selectedDate))
-    );
-  }, [appointments, selectedDate]);
+function parseHHMM(str, fallback) {
+  if (!str) return fallback;
+  const [h, m] = str.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
 
-  // Get location-specific time slots
-  const { timeSlots: TIME_SLOTS, timeSlotRanges: TIME_SLOT_RANGES } = useMemo(() => {
-    // Use provided location or find most common location from appointments
-    const targetLocation = location || getMostCommonLocation(todaysAppointments);
-    return getLocationTimeSlots(targetLocation, 'excel');
-  }, [location, todaysAppointments]);
-  
-  // Get service code for display
-  const getAppointmentServiceType = (appointment) => {
-    if (!appointment) return null;
-    
-    // Extract the first word from the appointment title/serviceType if exists
-    const serviceType = appointment.serviceType || 
-                      (appointment.title || "").split(' ')[0].toLowerCase();
-    
-    if (serviceType) {
-      // Map common words to service types
-      const serviceMap = {
-        direct: "direct",
-        supervision: "supervision",
-        indirect: "indirect",
-        lunch: "lunch",
-        circle: "circle",
-        "no-ow": "noOw",
-        noow: "noOw",
-        cleaning: "cleaning"
-      };
-      
-      return serviceMap[serviceType.toLowerCase()] || "direct";
-    }
-    
-    return "direct"; // Default
-  };
-  
-  // Compute all therapists from teams
-  const allTherapists = useMemo(() => {
-    if (!teams || !Array.isArray(teams)) return [];
-    return teams.flatMap(team => team?.Members || []);
-  }, [teams]);
-  
-  // Compute all patients from appointments
-  const allPatients = useMemo(() => {
-    if (!appointments || !Array.isArray(appointments)) return [];
-    const patients = {};
-    appointments.forEach(app => {
-      if (app?.patient?.id) {
-        patients[app.patient.id] = app.patient;
-      }
-    });
-    return Object.values(patients);
-  }, [appointments]);
-  
-  // Compute service types from appointments
-  const serviceTypes = useMemo(() => {
-    if (!appointments || !Array.isArray(appointments)) return [];
-    const types = new Set();
-    appointments.forEach(app => {
-      const serviceType = getAppointmentServiceType(app);
-      if (serviceType) types.add(serviceType);
-    });
-    return Array.from(types);
-  }, [appointments]);
-  
-  // Note: We now get TIME_SLOTS and TIME_SLOT_RANGES from location-specific time slots above
-  // No need for dynamic time slot calculation since it's handled by getLocationTimeSlots
-  
-  // Convert TIME_SLOT_RANGES to the format expected by appointment-grouping functions
-  const timeSlotMap = useMemo(() => {
-    const map = {};
-    TIME_SLOTS.forEach((slot, index) => {
-      const range = TIME_SLOT_RANGES[slot];
-      if (range) {
-        map[slot] = [range.start / 60, range.end / 60]; // Convert minutes to hours
-      }
-    });
-    return map;
-  }, [TIME_SLOTS, TIME_SLOT_RANGES]);
-  
-  // Format dates and times
-  const formatDayOfWeek = (date) => {
-    return format(new Date(date), 'EEEE');
-  };
-  
-  const formatDayOfMonth = (date) => {
-    return format(new Date(date), 'M/d');
-  };
+// ─── HIPAA name formatter ──────────────────────────────────────────────────────
+function hipaaName(patient) {
+  if (!patient) return null;
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  if (!first && !last) return 'Unknown';
+  const lastInitial = last ? `${last[0].toUpperCase()}.` : '';
+  return `${first} ${lastInitial}`.trim();
+}
 
-  const formatTime = (dateTimeString) => {
-    try {
-      return format(new Date(dateTimeString), 'h:mm a');
-    } catch (error) {
-      return 'Invalid time';
-    }
-  };
-  
-  // Format patient name based on user role and HIPAA settings
-  const formatPatientName = (patient, appointment) => {
-    // If no patient but we have an appointment, show the service type
-    if (!patient && appointment) {
-      const appointmentType = getAppointmentType(appointment.serviceType || 'direct');
-      return appointment.title || appointmentType.label;
-    }
-    
-    if (!patient) return 'Unknown';
-    
-    // For all roles in enhanced schedule view, show abbreviated names (first 2 + last 2 chars)
-    const firstTwo = patient.firstName?.substring(0, 2) || '--';
-    const lastTwo = patient.lastName?.substring(0, 2) || '--';
-    return `${firstTwo}${lastTwo}`;
-  };
+function fullName(patient) {
+  if (!patient) return null;
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  return `${first} ${last}`.trim() || 'Unknown';
+}
 
-  // Format full patient name for hover/tooltip
-  const formatFullPatientName = (patient, appointment) => {
-    // If no patient but we have an appointment, show the service type
-    if (!patient && appointment) {
-      const appointmentType = getAppointmentType(appointment.serviceType || 'direct');
-      return appointment.title || appointmentType.label;
-    }
-    
-    if (!patient) return 'Unknown';
-    return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`;
-  };
+function patientLabel(patient, hipaa) {
+  if (!patient) return null;
+  return hipaa ? hipaaName(patient) : fullName(patient);
+}
 
-  // Group appointments by therapist and group consecutive ones
-  const getTherapistAppointments = (therapistId) => {
-    // Filter appointments for this therapist on the selected date
-    if (!appointments || !Array.isArray(appointments) || !therapistId || !selectedDate) {
-      return [];
-    }
-    
-    const therapistApps = appointments.filter(app => 
-      app && app.therapistId === therapistId && app.startTime &&
-      isSameDay(new Date(app.startTime), new Date(selectedDate))
-    );
-    
-    // Sort by start time
-    const sortedApps = therapistApps.sort((a, b) => 
-      new Date(a.startTime) - new Date(b.startTime)
-    );
-    
-    // Group consecutive appointments
-    return groupConsecutiveAppointments(sortedApps);
-  };
+function therapistFullName(t) {
+  if (!t) return '';
+  return `${t.firstName || ''} ${t.lastName || ''}`.trim();
+}
 
-  // Check if an appointment is in a time slot
-  const isAppointmentInTimeSlot = (appointment, timeSlot) => {
-    const slotRange = TIME_SLOT_RANGES[timeSlot];
-    if (!slotRange) return false;
+function therapistInitials(t) {
+  if (!t) return '?';
+  return `${(t.firstName || '')[0] || ''}${(t.lastName || '')[0] || ''}`;
+}
 
-    const appStart = new Date(appointment.startTime);
-    const appEnd = new Date(appointment.endTime);
-    
-    const appStartMinutes = appStart.getHours() * 60 + appStart.getMinutes();
-    const appEndMinutes = appEnd.getHours() * 60 + appEnd.getMinutes();
+// ─── Component ─────────────────────────────────────────────────────────────────
+export default function EnhancedScheduleView({
+  teams            = [],
+  appointments     = [],
+  therapists       = [],
+  patients         = [],
+  selectedDate,
+  locations        = [],
+  selectedLocation = null,
+  userRole         = 'therapist',
+  onAppointmentClick  = () => {},
+  onAppointmentUpdate = () => {},
+}) {
+  // ── Local appointment state (optimistic updates + drag) ──
+  const [localAppts,    setLocalAppts]    = useState(appointments);
+  const [history,       setHistory]       = useState([]); // [{id, startTime, endTime}]
+  const [drag,          setDrag]          = useState(null);
+  const [tooltip,       setTooltip]       = useState(null);
+  const [conflictState, setConflictState] = useState(null);
+  const trackRef = useRef(null);
 
-    // Check if appointment overlaps with this time slot
-    return (
-      (appStartMinutes >= slotRange.start && appStartMinutes < slotRange.end) || // Starts in this slot
-      (appEndMinutes > slotRange.start && appEndMinutes <= slotRange.end) || // Ends in this slot
-      (appStartMinutes <= slotRange.start && appEndMinutes >= slotRange.end) // Spans across this slot
-    );
-  };
+  useEffect(() => setLocalAppts(appointments), [appointments]);
 
-  // Find uncovered patient slots (patients scheduled without therapist coverage)
-  const findUncoveredPatients = useMemo(() => {
-    // Temporarily disabled to fix incorrect flagging
-    return [];
-  }, [appointments, selectedDate]);
+  // ── Filter state ──
+  const [search,            setSearch]            = useState('');
+  const [filterServiceType, setFilterServiceType] = useState('all');
+  const [filterTeam,        setFilterTeam]        = useState('all');
+  const [hipaaMode,         setHipaaMode]         = useState(false);
 
-  // Toggle team expanded/collapsed
-  const toggleTeam = (teamId) => {
-    setExpandedTeams(prev => ({
-      ...prev,
-      [teamId]: !prev[teamId]
-    }));
-  };
+  const canDrag = userRole === 'admin' || userRole === 'bcba';
 
-  // Filter appointments based on search and filters
-  const filterAppointments = (appointments) => {
-    if (!appointments || !Array.isArray(appointments)) return [];
-    
-    return appointments.filter(app => {
-      if (!app) return false;
-      
-      // Search filter
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
-        const patientName = `${app.patient?.firstName || ''} ${app.patient?.lastName || ''}`.toLowerCase();
-        const therapistName = `${app.therapist?.firstName || ''} ${app.therapist?.lastName || ''}`.toLowerCase();
-        const location = app.location?.name?.toLowerCase() || '';
-        
-        if (!patientName.includes(query) && 
-            !therapistName.includes(query) && 
-            !location.includes(query)) {
-          return false;
-        }
-      }
-      
-      // Service type filter
-      if (selectedServiceType && getAppointmentServiceType(app) !== selectedServiceType) {
-        return false;
-      }
-      
-      // Therapist filter
-      if (selectedTherapist && app.therapistId !== selectedTherapist) {
-        return false;
-      }
-      
-      // Patient filter
-      if (selectedPatient && app.patient?.id !== selectedPatient) {
-        return false;
-      }
-      
-      return true;
-    });
-  };
-  
-  // Handle drag end for appointments
-  const handleDragEnd = (result) => {
-    if (!result.destination) return;
-    
-    const { draggableId, source, destination } = result;
-    
-    // Get the appointment that was dragged
-    const appointment = appointments.find(app => app.id === draggableId);
-    if (!appointment) return;
-    
-    // Get the time slot that the appointment was dragged to
-    const targetTimeSlot = TIME_SLOTS[destination.index];
-    const [targetStartHour, targetStartMinute] = targetTimeSlot.split('-')[0].split(':').map(Number);
-    
-    // Calculate the time difference between the appointment's original start time and end time
-    const originalStart = new Date(appointment.startTime);
-    const originalEnd = new Date(appointment.endTime);
-    const durationMinutes = (originalEnd - originalStart) / (1000 * 60);
-    
-    // Create new start and end times
-    const newStart = new Date(selectedDate);
-    newStart.setHours(targetStartHour, targetStartMinute, 0, 0);
-    
-    const newEnd = new Date(newStart);
-    newEnd.setMinutes(newStart.getMinutes() + durationMinutes);
-    
-    // Create updated appointment object
-    const updatedAppointment = {
-      ...appointment,
-      startTime: newStart.toISOString(),
-      endTime: newEnd.toISOString()
+  // ── Today's appointments ──
+  const todayAppts = useMemo(() =>
+    localAppts.filter(a => a?.startTime && isSameDay(new Date(a.startTime), new Date(selectedDate))),
+    [localAppts, selectedDate]
+  );
+
+  // ── Apply service type filter ──
+  const filteredByService = useMemo(() => {
+    if (filterServiceType === 'all') return todayAppts;
+    return todayAppts.filter(a => (a.serviceType || '') === filterServiceType);
+  }, [todayAppts, filterServiceType]);
+
+  // ── Operating hours ──
+  const { opStart, opEnd } = useMemo(() => {
+    const loc = locations.find(l => String(l.id) === String(selectedLocation)) || locations[0];
+    return {
+      opStart: parseHHMM(loc?.workingHoursStart, 7 * 60 + 30),
+      opEnd:   parseHHMM(loc?.workingHoursEnd,   17 * 60 + 30),
     };
-    
-    // Call the update handler
-    onAppointmentUpdate(updatedAppointment);
-  };
-  
-  // Reset all filters
-  const resetFilters = () => {
-    setSearchQuery('');
-    setSelectedServiceType('');
-    setSelectedTherapist('');
-    setSelectedPatient('');
-  };
+  }, [locations, selectedLocation]);
 
-  // Get all therapists from appointments if no teams exist
-  const getTherapistsFromAppointments = () => {
-    const therapists = {};
-    
-    if (!appointments || !Array.isArray(appointments)) return [];
-    
-    appointments.forEach(app => {
-      if (app?.therapist && app.therapistId) {
-        therapists[app.therapistId] = app.therapist;
-      }
+  // ── Grid bounds ──
+  const { gsMin, geMin } = useMemo(() => {
+    if (!filteredByService.length) return { gsMin: opStart, geMin: opEnd };
+    const mins = filteredByService.flatMap(a => [toMins(a.startTime), toMins(a.endTime)]);
+    return {
+      gsMin: Math.min(opStart, Math.min(...mins) - 15),
+      geMin: Math.max(opEnd,   Math.max(...mins) + 15),
+    };
+  }, [filteredByService, opStart, opEnd]);
+
+  const gridW = (geMin - gsMin) * PX_PER_MIN;
+
+  // ── Hour markers ──
+  const hourMarks = useMemo(() => {
+    const marks = [];
+    for (let h = Math.floor(gsMin / 60); h <= Math.ceil(geMin / 60); h++) {
+      const x = (h * 60 - gsMin) * PX_PER_MIN;
+      const p = h >= 12 ? 'PM' : 'AM';
+      const d = h === 0 ? 12 : h > 12 ? h - 12 : h;
+      marks.push({ x, label: `${d}${p}`, isHalf: false, isNoon: h === 12 });
+      const xh = ((h + 0.5) * 60 - gsMin) * PX_PER_MIN;
+      if (xh > 0 && xh < gridW) marks.push({ x: xh, label: '', isHalf: true, isNoon: false });
+    }
+    return marks;
+  }, [gsMin, geMin, gridW]);
+
+  // ── Build team → therapist row list ──
+  // Each entry: { therapist, teamId, teamName, teamColor, teamLeadBCBA, teamMemberCount, appts }
+  const allRows = useMemo(() => {
+    // Build a map from therapistId → team info
+    const therapistTeamMap = {};
+    teams.forEach((team, ti) => {
+      const color = team.color || TEAM_COLORS[ti % TEAM_COLORS.length];
+      (team.Members || []).forEach(member => {
+        therapistTeamMap[member.id] = {
+          teamId:          team.id,
+          teamName:        team.name,
+          teamColor:       color,
+          teamLeadBCBA:    team.LeadBCBA,
+          teamMemberCount: (team.Members || []).length,
+          teamIndex:       ti,
+        };
+      });
     });
-    
-    return Object.values(therapists);
-  };
-  
-  // Check if teams data is empty and we're not showing location view
-  if ((!teams || !Array.isArray(teams) || teams.length === 0) && 
-      !props.showLocationView) {
-    return (
-      <div className="text-center py-12 text-gray-500 dark:text-gray-400">
-        <Calendar className="h-12 w-12 mx-auto mb-4 opacity-30" />
-        <p className="text-lg font-medium mb-2">No Teams Available</p>
-        <p>There are no teams configured yet. Create teams to use this view.</p>
-      </div>
-    );
-  }
-  
-  // If no teams but show location view is on, create a virtual "Location" team
-  // with all therapists extracted from appointments
-  const displayTeams = teams.length > 0 ? teams : [{
-    id: 'location-team',
-    name: 'Location',
-    Members: getTherapistsFromAppointments()
-  }];
 
+    // Build per-therapist appointment map from filteredByService
+    const therapistApptMap = {};
+    filteredByService.forEach(a => {
+      if (!a.therapistId || !a.therapist) return;
+      if (!therapistApptMap[a.therapistId]) {
+        therapistApptMap[a.therapistId] = {
+          therapist: a.therapist,
+          appts:     [],
+        };
+      }
+      therapistApptMap[a.therapistId].appts.push(a);
+    });
+
+    // Also include therapists from teams who might have no appointments today
+    // (they still show as empty rows) — but only if search/filter don't exclude them.
+    // Actually, per spec: only show rows that have appointments *or* that exist in teams.
+    // For now: show all team members; rows with no appointments are still displayed.
+    const rowsByTherapist = {};
+
+    // Start from teams to preserve ordering
+    teams.forEach((team, ti) => {
+      const color = team.color || TEAM_COLORS[ti % TEAM_COLORS.length];
+      (team.Members || []).forEach(member => {
+        if (rowsByTherapist[member.id]) return;
+        rowsByTherapist[member.id] = {
+          therapist:      member,
+          teamId:         team.id,
+          teamName:       team.name,
+          teamColor:      color,
+          teamLeadBCBA:   team.LeadBCBA,
+          teamMemberCount:(team.Members || []).length,
+          teamIndex:      ti,
+          appts:          (therapistApptMap[member.id]?.appts || [])
+                            .slice()
+                            .sort((a, b) => new Date(a.startTime) - new Date(b.startTime)),
+        };
+      });
+    });
+
+    // Also add therapists from appointments not in any team
+    filteredByService.forEach(a => {
+      if (!a.therapistId || !a.therapist || rowsByTherapist[a.therapistId]) return;
+      rowsByTherapist[a.therapistId] = {
+        therapist:      a.therapist,
+        teamId:         null,
+        teamName:       'No Team',
+        teamColor:      '#9CA3AF',
+        teamLeadBCBA:   null,
+        teamMemberCount:0,
+        teamIndex:      999,
+        appts:          (therapistApptMap[a.therapistId]?.appts || [])
+                          .slice()
+                          .sort((a2, b2) => new Date(a2.startTime) - new Date(b2.startTime)),
+      };
+    });
+
+    // Sort: by teamIndex, then therapist last name
+    return Object.values(rowsByTherapist).sort((a, b) => {
+      if (a.teamIndex !== b.teamIndex) return a.teamIndex - b.teamIndex;
+      return (a.therapist.lastName || '').localeCompare(b.therapist.lastName || '');
+    });
+  }, [teams, filteredByService]);
+
+  // ── Apply team filter ──
+  const rowsAfterTeamFilter = useMemo(() => {
+    if (filterTeam === 'all') return allRows;
+    return allRows.filter(r => String(r.teamId) === String(filterTeam));
+  }, [allRows, filterTeam]);
+
+  // ── Apply search filter (therapist name OR patient name in any appt) ──
+  const visibleRows = useMemo(() => {
+    if (!search.trim()) return rowsAfterTeamFilter;
+    const q = search.trim().toLowerCase();
+    return rowsAfterTeamFilter.filter(row => {
+      const tName = therapistFullName(row.therapist).toLowerCase();
+      if (tName.includes(q)) return true;
+      return row.appts.some(a => {
+        const p = a.patient;
+        if (!p) return false;
+        const pFull = fullName(p).toLowerCase();
+        const pHipaa = hipaaName(p).toLowerCase();
+        return pFull.includes(q) || pHipaa.includes(q);
+      });
+    });
+  }, [rowsAfterTeamFilter, search]);
+
+  // ── Count stats for filter bar ──
+  const { visibleTeamCount } = useMemo(() => {
+    const teamIds = new Set(visibleRows.map(r => r.teamId));
+    return { visibleTeamCount: teamIds.size };
+  }, [visibleRows]);
+
+  const isFiltering = search.trim() || filterServiceType !== 'all' || filterTeam !== 'all';
+
+  // ── Appointment layout helper ──
+  const layout = useCallback((a) => {
+    const s = toMins(a.startTime), e = toMins(a.endTime);
+    return {
+      x: (s - gsMin) * PX_PER_MIN,
+      w: Math.max((e - s) * PX_PER_MIN, 6),
+      startMins: s,
+      endMins:   e,
+    };
+  }, [gsMin]);
+
+  const isConsecutive = (a, b) =>
+    Math.abs(toMins(b.startTime) - toMins(a.endTime)) <= CONNECT_GAP;
+
+  // ── Drag handlers ──
+  const onMouseMove = useCallback((e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.mouseX0;
+    const dm = snapMin(dx / PX_PER_MIN);
+
+    setLocalAppts(prev => prev.map(a => {
+      if (a.id !== drag.id) return a;
+      const base = new Date(a.startTime);
+
+      if (drag.type === 'move') {
+        const ns  = Math.max(gsMin, drag.s0 + dm);
+        const dur = drag.e0 - drag.s0;
+        const ne  = ns + dur;
+        const d1  = new Date(base); d1.setHours(Math.floor(ns / 60), ns % 60, 0, 0);
+        const d2  = new Date(base); d2.setHours(Math.floor(ne / 60), ne % 60, 0, 0);
+        setTooltip({ text: `${fmt12(d1.toISOString())} – ${fmt12(d2.toISOString())}` });
+        return { ...a, startTime: d1.toISOString(), endTime: d2.toISOString() };
+      } else {
+        const ne = Math.max(drag.s0 + SNAP, drag.e0 + dm);
+        const d2 = new Date(base); d2.setHours(Math.floor(ne / 60), ne % 60, 0, 0);
+        setTooltip({ text: `End: ${fmt12(d2.toISOString())} (${fmtDur(a.startTime, d2.toISOString())})` });
+        return { ...a, endTime: d2.toISOString() };
+      }
+    }));
+  }, [drag, gsMin]);
+
+  const onMouseUp = useCallback(() => {
+    if (!drag) return;
+    const updated = localAppts.find(a => a.id === drag.id);
+    if (updated && (updated.startTime !== drag.origStart || updated.endTime !== drag.origEnd)) {
+      const conflicts = findConflicts(updated, localAppts);
+      if (conflicts.length > 0) {
+        setLocalAppts(prev => prev.map(a =>
+          a.id === drag.id ? { ...a, startTime: drag.origStart, endTime: drag.origEnd } : a
+        ));
+        setConflictState({
+          movedAppt: updated,
+          conflicts,
+          originalTimes: { startTime: drag.origStart, endTime: drag.origEnd },
+        });
+      } else {
+        setHistory(h => [...h.slice(-19), { id: drag.id, startTime: drag.origStart, endTime: drag.origEnd }]);
+        onAppointmentUpdate(updated);
+      }
+    }
+    setDrag(null);
+    setTooltip(null);
+  }, [drag, localAppts, onAppointmentUpdate]);
+
+  useEffect(() => {
+    if (!drag) return;
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup',  onMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup',  onMouseUp);
+    };
+  }, [drag, onMouseMove, onMouseUp]);
+
+  const beginDrag = (e, appt, type) => {
+    if (!canDrag) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDrag({
+      type,
+      id:        appt.id,
+      mouseX0:   e.clientX,
+      s0:        toMins(appt.startTime),
+      e0:        toMins(appt.endTime),
+      origStart: appt.startTime,
+      origEnd:   appt.endTime,
+    });
+  };
+
+  // ── Undo ──
+  const undo = () => {
+    if (!history.length) return;
+    const last = history[history.length - 1];
+    setHistory(h => h.slice(0, -1));
+    const full = localAppts.find(a => a.id === last.id);
+    setLocalAppts(prev => prev.map(a =>
+      a.id === last.id ? { ...a, startTime: last.startTime, endTime: last.endTime } : a
+    ));
+    if (full) onAppointmentUpdate({ ...full, startTime: last.startTime, endTime: last.endTime });
+  };
+
+  const clearFilters = () => {
+    setSearch('');
+    setFilterServiceType('all');
+    setFilterTeam('all');
+  };
+
+  // ── Group rows into team sections for rendering ──
+  // Returns: [{teamId, teamName, teamColor, teamLeadBCBA, rows: [...]}]
+  const teamSections = useMemo(() => {
+    const sections = [];
+    const seen = {};
+    visibleRows.forEach(row => {
+      const key = row.teamId ?? '__none__';
+      if (!seen[key]) {
+        seen[key] = true;
+        sections.push({
+          teamId:      row.teamId,
+          teamName:    row.teamName,
+          teamColor:   row.teamColor,
+          teamLeadBCBA:row.teamLeadBCBA,
+          rows:        [],
+        });
+      }
+      sections[sections.length - 1].rows.push(row);
+    });
+    return sections;
+  }, [visibleRows]);
+
+  // ─── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-4">
-      {/* Search and filters */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-2 mb-4">
-        <div className="relative w-full sm:w-64">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-gray-400 dark:text-gray-500" />
-          <Input
-            type="text"
-            placeholder="Search patient, therapist..."
-            className="pl-8 pr-4"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-        </div>
-        
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center"
+    <div className="space-y-3 select-none">
+
+      {/* ── Filter bar ──────────────────────────────────────────────────────── */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+
+          {/* Search */}
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search therapist or patient…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className={cn(
+                'w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-gray-100 dark:bg-gray-700',
+                'border border-transparent focus:border-blue-400 focus:bg-white dark:focus:bg-gray-600',
+                'outline-none transition-colors placeholder:text-gray-400 dark:placeholder:text-gray-500',
+                'text-gray-900 dark:text-gray-100'
+              )}
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Service type filter */}
+          <select
+            value={filterServiceType}
+            onChange={e => setFilterServiceType(e.target.value)}
+            className={cn(
+              'py-2 pl-3 pr-8 text-sm rounded-xl bg-gray-100 dark:bg-gray-700 border border-transparent',
+              'focus:border-blue-400 focus:bg-white dark:focus:bg-gray-600 outline-none transition-colors',
+              'text-gray-900 dark:text-gray-100 cursor-pointer appearance-none',
+              filterServiceType !== 'all' && 'border-blue-400 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+            )}
+            style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E\")", backgroundRepeat: 'no-repeat', backgroundPosition: 'right 10px center' }}
           >
-            <Filter className="h-4 w-4 mr-1" />
-            Filters
-            <ChevronDown className={`h-4 w-4 ml-1 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
-          </Button>
-          
-          {(userRole === 'bcba' || userRole === 'admin') && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowNameToggle(!showNameToggle)}
-              title={showNameToggle ? "Show full names" : "Use HIPAA-compliant names"}
-              className="flex items-center"
-            >
-              <Eye className="h-4 w-4 mr-1" />
-              {showNameToggle ? "HIPAA Mode" : "Full Names"}
-            </Button>
+            <option value="all">All Services</option>
+            {Object.entries(SVC).map(([key, s]) => (
+              <option key={key} value={key}>{s.label}</option>
+            ))}
+          </select>
+
+          {/* Team filter */}
+          <select
+            value={filterTeam}
+            onChange={e => setFilterTeam(e.target.value)}
+            className={cn(
+              'py-2 pl-3 pr-8 text-sm rounded-xl bg-gray-100 dark:bg-gray-700 border border-transparent',
+              'focus:border-blue-400 focus:bg-white dark:focus:bg-gray-600 outline-none transition-colors',
+              'text-gray-900 dark:text-gray-100 cursor-pointer appearance-none',
+              filterTeam !== 'all' && 'border-blue-400 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+            )}
+            style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E\")", backgroundRepeat: 'no-repeat', backgroundPosition: 'right 10px center' }}
+          >
+            <option value="all">All Teams</option>
+            {teams.map((t, i) => (
+              <option key={t.id} value={t.id}>{t.name || `Team ${i + 1}`}</option>
+            ))}
+          </select>
+
+          {/* HIPAA toggle */}
+          <button
+            onClick={() => setHipaaMode(v => !v)}
+            title={hipaaMode ? 'Showing abbreviated patient names (HIPAA mode)' : 'Click to enable HIPAA mode'}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-xl border transition-all',
+              hipaaMode
+                ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
+                : 'bg-gray-100 dark:bg-gray-700 border-transparent text-gray-600 dark:text-gray-400 hover:border-gray-300'
+            )}
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
+            HIPAA
+          </button>
+
+          {/* Results count + clear */}
+          {isFiltering && (
+            <div className="flex items-center gap-2 ml-auto flex-shrink-0">
+              <span className="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
+                {visibleRows.length} therapist{visibleRows.length !== 1 ? 's' : ''},{' '}
+                {visibleTeamCount} team{visibleTeamCount !== 1 ? 's' : ''}
+              </span>
+              <button
+                onClick={clearFilters}
+                className="text-xs text-blue-600 dark:text-blue-400 hover:underline font-medium whitespace-nowrap"
+              >
+                Clear filters
+              </button>
+            </div>
           )}
         </div>
       </div>
-      
-      {/* Expanded filters */}
-      {showFilters && (
-        <div className="bg-white dark:bg-gray-800 p-4 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 mb-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Therapist</label>
-              <select
-                className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                value={selectedTherapist}
-                onChange={(e) => setSelectedTherapist(e.target.value)}
-              >
-                <option value="">All Therapists</option>
-                {allTherapists.map(therapist => (
-                  <option key={therapist.id} value={therapist.id}>
-                    {therapist.firstName} {therapist.lastName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium mb-1">Patient</label>
-              <select
-                className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                value={selectedPatient}
-                onChange={(e) => setSelectedPatient(e.target.value)}
-              >
-                <option value="">All Patients</option>
-                {allPatients.map(patient => (
-                  <option key={patient.id} value={patient.id}>
-                    {patient.firstName} {patient.lastName}
-                  </option>
-                ))}
-              </select>
-            </div>
-            
-            <div>
-              <label className="block text-sm font-medium mb-1">Service Type</label>
-              <select
-                className="w-full rounded-md border-gray-300 dark:border-gray-700 dark:bg-gray-800"
-                value={selectedServiceType}
-                onChange={(e) => setSelectedServiceType(e.target.value)}
-              >
-                <option value="">All Service Types</option>
-                {serviceTypes.map(type => (
-                  <option key={type} value={type}>
-                    {type.charAt(0).toUpperCase() + type.slice(1)}
-                  </option>
-                ))}
-              </select>
-            </div>
+
+      {/* ── Timeline card ───────────────────────────────────────────────────── */}
+      <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+
+        {/* Title + undo */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 dark:border-gray-700">
+          <div>
+            <h3 className="font-semibold text-gray-900 dark:text-white text-base">
+              {format(new Date(selectedDate), 'EEEE, MMMM d')} — Full Schedule
+            </h3>
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+              {canDrag ? 'Drag to reschedule · Drag right edge to resize · ' : ''}Click to view details
+            </p>
           </div>
-          
-          <div className="mt-4 flex justify-end">
-            <Button variant="outline" size="sm" onClick={resetFilters}>
-              Reset Filters
+          {history.length > 0 && (
+            <Button variant="outline" size="sm" onClick={undo} className="flex items-center gap-1.5 text-xs">
+              <Undo2 className="h-3.5 w-3.5" />
+              Undo
             </Button>
-          </div>
+          )}
         </div>
-      )}
-      
-      {/* Team schedule view */}
-      <DragDropContext onDragEnd={handleDragEnd}>
-        {displayTeams.map(team => {
-          const isExpanded = expandedTeams[team.id] !== false; // Default to expanded
-          
-          return (
-            <div 
-              key={team.id} 
-              className="border dark:border-gray-700 rounded-lg overflow-hidden bg-white dark:bg-gray-800 shadow-sm"
+
+        {/* Drag tooltip */}
+        {tooltip && (
+          <div className="sticky top-0 z-50 flex justify-center pointer-events-none">
+            <div className="bg-gray-900/90 text-white text-xs px-3 py-1.5 rounded-full shadow-lg mt-1">
+              {tooltip.text}
+            </div>
+          </div>
+        )}
+
+        {/* No results */}
+        {visibleRows.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-16 text-gray-400 dark:text-gray-500">
+            <Search className="h-10 w-10 mb-3 opacity-30" />
+            <p className="text-base font-medium">No therapists match your filters</p>
+            <button
+              onClick={clearFilters}
+              className="mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
             >
-              {/* Team Header */}
-              <div 
-                className="bg-blue-50 dark:bg-blue-900/20 p-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer"
-                onClick={() => toggleTeam(team.id)}
-              >
-                <div>
-                  <h3 className="font-bold text-lg text-blue-900 dark:text-blue-100">
-                    {team.id === 'location-team' ? 'Location Schedule' : `TEAM ${team.LeadBCBA?.firstName || team.name || team.id}`}
-                  </h3>
-                  {team.id !== 'location-team' && (
-                    <p className="text-sm text-blue-700 dark:text-blue-300">
-                      Lead: {team.LeadBCBA ? `${team.LeadBCBA.firstName} ${team.LeadBCBA.lastName}` : 'Unassigned'}
-                    </p>
-                  )}
+              Clear all filters
+            </button>
+          </div>
+        )}
+
+        {visibleRows.length > 0 && (
+          <div className="overflow-x-auto" ref={trackRef}>
+            <div className="relative" style={{ minWidth: LABEL_W + gridW + 32 }}>
+
+              {/* ── Sticky time header ─────────────────────────────────────── */}
+              <div className="flex sticky top-0 z-10 bg-white dark:bg-gray-800 border-b border-gray-100 dark:border-gray-700">
+                <div
+                  style={{ width: LABEL_W, minWidth: LABEL_W, height: 36 }}
+                  className="px-4 flex items-center text-xs font-medium text-gray-400 dark:text-gray-500 border-r border-gray-100 dark:border-gray-700 flex-shrink-0"
+                >
+                  Therapist
                 </div>
-                <Button variant="ghost" size="sm">
-                  {isExpanded ? 'Collapse' : 'Expand'}
-                </Button>
+                <div className="relative flex-1" style={{ height: 36 }}>
+                  {/* Out-of-hours shading in header */}
+                  {gsMin < opStart && (
+                    <div
+                      className="absolute top-0 bottom-0 pointer-events-none"
+                      style={{ left: 0, width: (opStart - gsMin) * PX_PER_MIN, background: 'rgba(0,0,0,0.04)' }}
+                    />
+                  )}
+                  {geMin > opEnd && (
+                    <div
+                      className="absolute top-0 bottom-0 pointer-events-none"
+                      style={{ left: (opEnd - gsMin) * PX_PER_MIN, right: 0, background: 'rgba(0,0,0,0.04)' }}
+                    />
+                  )}
+                  {hourMarks.map((m, i) => (
+                    <div key={i} className="absolute top-0 bottom-0 flex flex-col justify-center" style={{ left: m.x }}>
+                      {m.isHalf ? (
+                        <div className="w-px h-2 bg-gray-200 dark:bg-gray-600 -translate-x-px" />
+                      ) : (
+                        <span className={cn(
+                          'text-[11px] font-medium px-0.5 -translate-x-1/2',
+                          m.isNoon ? 'text-blue-500 dark:text-blue-400' : 'text-gray-400 dark:text-gray-500'
+                        )}>
+                          {m.label}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
               </div>
-              
-              {isExpanded && (
-                <div className="overflow-x-auto" style={{ overflowY: 'visible' }}>
-                  <Droppable droppableId={`team-${team.id}`} direction="vertical">
-                    {(provided) => (
-                      <div 
-                        className="min-w-[800px]"
-                        ref={provided.innerRef}
-                        {...provided.droppableProps}
+
+              {/* ── Team sections ──────────────────────────────────────────── */}
+              {teamSections.map((section) => (
+                <Fragment key={section.teamId ?? '__none__'}>
+
+                  {/* Team divider row */}
+                  <div
+                    className="flex items-center border-b border-gray-100 dark:border-gray-700"
+                    style={{ height: 32, background: `${section.teamColor}10` }}
+                  >
+                    {/* Colored left border strip */}
+                    <div
+                      style={{ width: 4, alignSelf: 'stretch', background: section.teamColor, flexShrink: 0 }}
+                    />
+                    <div
+                      style={{ width: LABEL_W - 4, minWidth: LABEL_W - 4, flexShrink: 0 }}
+                      className="px-3 flex items-center gap-2 border-r border-gray-100 dark:border-gray-700 overflow-hidden"
+                    >
+                      <span
+                        className="text-xs font-bold uppercase tracking-wide truncate"
+                        style={{ color: section.teamColor }}
                       >
-                        {/* Header rows with day, date, and therapist names */}
-                        <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700">
-                          <div className="p-2 font-medium border-r dark:border-gray-700 text-center">
-                            {formatDayOfWeek(selectedDate)}
-                          </div>
-                          
-                          {team.Members?.map(member => (
-                            <div 
-                              key={member.id} 
-                              className={cn(
-                                "p-2 font-medium border-r dark:border-gray-700 text-center",
-                                selectedTherapist === member.id && "bg-blue-100 dark:bg-blue-900/30"
-                              )}
-                            >
-                              {member.firstName} {member.lastName}
-                            </div>
-                          ))}
-                        </div>
-                        
-                        <div className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b bg-gray-50 dark:bg-gray-800 dark:border-gray-700">
-                          <div className="p-2 font-medium border-r dark:border-gray-700 text-center">
-                            {formatDayOfMonth(selectedDate)}
-                          </div>
-                          
-                          {team.Members?.map(member => (
-                            <div key={member.id} className="p-2 font-medium border-r dark:border-gray-700 text-center">
-                              {member.firstName}
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Time slots */}
-                        {TIME_SLOTS.map((timeSlot, index) => {
-                          return (
-                            <div 
-                              key={index}
-                              className="grid grid-cols-[100px_repeat(auto-fill,minmax(100px,1fr))] border-b dark:border-gray-700"
-                            >
-                              {/* Time column */}
-                              <div className="p-2 text-sm border-r dark:border-gray-700 font-medium text-center">
-                                {timeSlot}
-                              </div>
-
-                              {/* Therapist columns */}
-                              {team.Members?.map(member => {
-                                const therapistGroups = getTherapistAppointments(member.id);
-                                
-                                // Find the group that overlaps with this time slot
-                                const groupInSlot = therapistGroups.find(group => {
-                                  const spannedSlots = getSpannedTimeSlots(group, timeSlotMap);
-                                  return spannedSlots.includes(timeSlot);
-                                });
-                                
-                                const serviceType = groupInSlot ? getAppointmentServiceType(groupInSlot) : null;
-                                const position = groupInSlot ? getGroupPositionInSlot(groupInSlot, timeSlot, timeSlotMap) : null;
-                                
-                                // Check for uncovered appointments
-                                const uncoveredInSlot = findUncoveredPatients.filter(app => 
-                                  isAppointmentInTimeSlot(app, timeSlot) && app.therapistId === member.id
-                                );
-                                const hasUncovered = uncoveredInSlot.length > 0;
-                                
-                                // Determine border styles for grouped appointments
-                                let borderStyles = "border-r dark:border-gray-700";
-                                let additionalStyles = "";
-                                
-                                if (groupInSlot && position) {
-                                  if (!position.isLastSlot && !position.isOnlySlot) {
-                                    borderStyles += " border-b-transparent"; // Remove bottom border for continuing groups
-                                  }
-                                  if (!position.isFirstSlot && !position.isOnlySlot) {
-                                    additionalStyles += " rounded-t-none"; // Remove top rounding for continuing groups
-                                  }
-                                  if (!position.isLastSlot && !position.isOnlySlot) {
-                                    additionalStyles += " rounded-b-none"; // Remove bottom rounding for continuing groups
-                                  }
-                                  if (position.isFirstSlot && !position.isOnlySlot) {
-                                    additionalStyles += " rounded-b-none rounded-t-md"; // Round only top for first slot
-                                  }
-                                  if (position.isLastSlot && !position.isOnlySlot) {
-                                    additionalStyles += " rounded-t-none rounded-b-md"; // Round only bottom for last slot
-                                  }
-                                }
-                                
-                                return (
-                                  <Draggable 
-                                    key={`${member.id}-${timeSlot}`}
-                                    draggableId={groupInSlot?.id || `empty-${member.id}-${timeSlot}`}
-                                    index={index}
-                                    isDragDisabled={!groupInSlot}
-                                  >
-                                    {(provided, snapshot) => (
-                                      <div 
-                                        className={cn(
-                                          "p-2 min-h-[2.5rem] text-center text-sm relative",
-                                          borderStyles,
-                                          additionalStyles,
-                                          groupInSlot && "cursor-pointer hover:opacity-80",
-                                          hasUncovered 
-                                            ? SERVICE_TYPE_COLORS.uncovered
-                                            : serviceType && SERVICE_TYPE_COLORS[serviceType],
-                                          snapshot.isDragging && "opacity-70 shadow-md",
-                                          searchQuery && groupInSlot && "ring-2 ring-yellow-400 dark:ring-yellow-600"
-                                        )}
-                                        onClick={groupInSlot ? () => onAppointmentClick(groupInSlot.appointments[0]) : undefined}
-                                        title={
-                                          hasUncovered 
-                                            ? `⚠️ UNCOVERED: ${formatFullPatientName(uncoveredInSlot[0].patient, uncoveredInSlot[0])} - ${uncoveredInSlot[0].reason}`
-                                            : groupInSlot 
-                                              ? `${formatFullPatientName(groupInSlot.patient, groupInSlot.appointments[0])} - ${formatTime(groupInSlot.startTime)} to ${formatTime(groupInSlot.endTime)}`
-                                              : ''
-                                        }
-                                        ref={provided.innerRef}
-                                        {...provided.draggableProps}
-                                        {...provided.dragHandleProps}
-                                      >
-                                        {groupInSlot ? (
-                                          <div className="font-medium">
-                                            {hasUncovered && <span className="text-xs">⚠️ </span>}
-                                            {/* For non-patient appointments, always show the service type */}
-                                            {(!requiresPatient(groupInSlot.serviceType) || !groupInSlot.patient) ? (
-                                              <span 
-                                                title={formatFullPatientName(groupInSlot.patient, groupInSlot.appointments[0])}
-                                                className="cursor-help"
-                                              >
-                                                {formatPatientName(groupInSlot.patient, groupInSlot.appointments[0])}
-                                              </span>
-                                            ) : (
-                                              /* For patient appointments, only show in the first slot */
-                                              (position?.isFirstSlot || position?.isOnlySlot) ? (
-                                                <span 
-                                                  title={formatFullPatientName(groupInSlot.patient, groupInSlot.appointments[0])}
-                                                  className="cursor-help"
-                                                >
-                                                  {formatPatientName(groupInSlot.patient, groupInSlot.appointments[0])}
-                                                </span>
-                                              ) : null
-                                            )}
-                                          </div>
-                                        ) : null}
-                                        {hasUncovered && (
-                                          <div className="absolute top-0 right-0 -mt-1 -mr-1">
-                                            <div className="w-3 h-3 bg-red-600 rounded-full animate-ping" />
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </Draggable>
-                                );
-                              })}
-                            </div>
-                          );
-                        })}
-                        {provided.placeholder}
-                      </div>
-                    )}
-                  </Droppable>
-                  
-                  {/* List of today's appointments for this team */}
-                  <div className="p-4 border-t dark:border-gray-700">
-                    <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 uppercase mb-3">
-                      Appointments for {format(new Date(selectedDate), 'MMMM d, yyyy')}
-                    </h4>
-                    
-                    <div className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg">
-                      {(() => {
-                        const allGroups = team.Members?.flatMap(member => {
-                          const therapistGroups = getTherapistAppointments(member.id);
-                          // Filter groups based on the filtered appointments
-                          const filteredGroups = therapistGroups.filter(group => {
-                            return filterAppointments(group.appointments).length > 0;
-                          });
-                          return filteredGroups.map(group => ({
-                            ...group,
-                            therapistName: `${member.firstName} ${member.lastName}`
-                          }));
-                        }) || [];
-                        
-                        // Sort groups by start time
-                        const sortedGroups = allGroups.sort((a, b) => {
-                          return new Date(a.startTime) - new Date(b.startTime);
-                        });
-                        
-                        return sortedGroups.length > 0 ? (
-                          sortedGroups.map(group => (
-                            <div 
-                              key={group.id} 
-                              className={cn(
-                                "p-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer",
-                                searchQuery && searchQuery.toLowerCase() && 
-                                  (group.patient?.firstName?.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                                   group.patient?.lastName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                                   group.therapistName?.toLowerCase().includes(searchQuery.toLowerCase())) && 
-                                  "bg-yellow-50 dark:bg-yellow-900/20"
-                              )}
-                              onClick={() => onAppointmentClick(group.appointments[0])}
-                            >
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <div className="font-medium">
-                                    <span 
-                                      title={formatFullPatientName(group.patient, group.appointments[0])}
-                                      className="cursor-help"
-                                    >
-                                      {formatPatientName(group.patient, group.appointments[0])}
-                                    </span>
-                                    {group.appointments.length > 1 && (
-                                      <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-gray-200 dark:bg-gray-700">
-                                        {group.appointments.length} sessions
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                                    with {group.therapistName}
-                                  </div>
-                                </div>
-                                <div className={cn(
-                                  "text-xs px-2 py-1 rounded-full",
-                                  SERVICE_TYPE_COLORS[getAppointmentServiceType(group) || 'default']
-                                )}>
-                                  {group.serviceType || getAppointmentServiceType(group) || 'Session'}
-                                </div>
-                              </div>
-                              
-                              <div className="mt-2 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                                <Clock className="h-4 w-4 mr-1" />
-                                <span>{formatTime(group.startTime)} - {formatTime(group.endTime)}</span>
-                                {group.totalDuration && (
-                                  <span className="ml-2">({group.totalDuration} mins)</span>
-                                )}
-                              </div>
-                              
-                              {group.location && (
-                                <div className="mt-1 flex items-center text-sm text-gray-500 dark:text-gray-400">
-                                  <MapPin className="h-4 w-4 mr-1" />
-                                  <span>{group.location.name}</span>
-                                </div>
-                              )}
-                            </div>
-                          ))
-                        ) : (
-                          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-                            No appointments scheduled for this team today
-                          </div>
-                        );
-                      })()}
+                        {section.teamName}
+                      </span>
+                      {section.teamLeadBCBA && (
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500 truncate hidden sm:inline">
+                          · {section.teamLeadBCBA.firstName} {section.teamLeadBCBA.lastName}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex-1 flex items-center px-3 gap-2">
+                      <span className="text-[11px] text-gray-400 dark:text-gray-500">
+                        {section.rows.length} therapist{section.rows.length !== 1 ? 's' : ''}
+                      </span>
+                      {section.teamLeadBCBA && (
+                        <span className="text-[11px] text-gray-400 dark:text-gray-500 truncate sm:hidden">
+                          · Lead: {section.teamLeadBCBA.firstName}
+                        </span>
+                      )}
                     </div>
                   </div>
-                </div>
+
+                  {/* Therapist rows */}
+                  {section.rows.map((row, rowIdx) => {
+                    const { therapist, appts: rowAppts, teamColor } = row;
+                    const initials = therapistInitials(therapist);
+
+                    return (
+                      <div
+                        key={therapist.id}
+                        className={cn(
+                          'flex border-b border-gray-50 dark:border-gray-700/40',
+                          rowIdx % 2 === 1 && 'bg-gray-50/40 dark:bg-gray-800/60'
+                        )}
+                        style={{ height: ROW_H }}
+                      >
+                        {/* Label column */}
+                        <div
+                          style={{ width: LABEL_W, minWidth: LABEL_W, flexShrink: 0 }}
+                          className="px-3 flex items-center gap-2.5 border-r border-gray-100 dark:border-gray-700"
+                        >
+                          <div
+                            className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-bold text-white shadow-sm"
+                            style={{ background: teamColor }}
+                          >
+                            {initials}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate leading-tight">
+                              {therapist.firstName} {therapist.lastName}
+                            </div>
+                            <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
+                              {rowAppts.length} appt{rowAppts.length !== 1 ? 's' : ''}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Timeline track */}
+                        <div className="relative flex-1" style={{ height: ROW_H }}>
+
+                          {/* Out-of-hours hatching */}
+                          {gsMin < opStart && (
+                            <div
+                              className="absolute top-0 bottom-0 pointer-events-none"
+                              style={{
+                                left: 0,
+                                width: (opStart - gsMin) * PX_PER_MIN,
+                                background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
+                                backgroundColor: 'rgba(0,0,0,0.03)',
+                              }}
+                            />
+                          )}
+                          {geMin > opEnd && (
+                            <div
+                              className="absolute top-0 bottom-0 pointer-events-none"
+                              style={{
+                                left: (opEnd - gsMin) * PX_PER_MIN,
+                                right: 0,
+                                background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
+                                backgroundColor: 'rgba(0,0,0,0.03)',
+                              }}
+                            />
+                          )}
+
+                          {/* Hour grid lines */}
+                          {hourMarks.filter(m => !m.isHalf).map((m, i) => (
+                            <div
+                              key={i}
+                              className="absolute top-0 bottom-0 border-l border-gray-100 dark:border-gray-700/40"
+                              style={{ left: m.x }}
+                            />
+                          ))}
+
+                          {/* Subtle track line */}
+                          <div
+                            className="absolute top-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+                            style={{
+                              left: 0, right: 0, height: 2,
+                              background: teamColor,
+                              opacity: 0.15,
+                            }}
+                          />
+
+                          {/* Appointment blocks */}
+                          {rowAppts.map((appt, idx) => {
+                            const { x, w } = layout(appt);
+                            const prev = rowAppts[idx - 1];
+                            const next = rowAppts[idx + 1];
+                            const fromPrev   = prev && isConsecutive(prev, appt);
+                            const toNext     = next && isConsecutive(appt, next);
+                            const isDragging = drag?.id === appt.id;
+                            const svc        = svcOf(appt.serviceType);
+
+                            const rOuter = '999px';
+                            const rInner = '5px';
+                            const borderRadius = [
+                              fromPrev ? rInner : rOuter,
+                              toNext   ? rInner : rOuter,
+                              toNext   ? rInner : rOuter,
+                              fromPrev ? rInner : rOuter,
+                            ].join(' ');
+
+                            const ml = fromPrev ? 1 : 0;
+                            const mr = toNext   ? 1 : 0;
+
+                            // Patient label
+                            const pLabel = appt.patient
+                              ? patientLabel(appt.patient, hipaaMode)
+                              : svc.label;
+
+                            // Service abbreviation for narrow blocks
+                            const svcAbbr = (appt.serviceType || 'D')[0].toUpperCase();
+
+                            return (
+                              <div
+                                key={appt.id}
+                                className={cn(
+                                  'absolute flex items-center overflow-visible',
+                                  isDragging
+                                    ? 'cursor-grabbing z-30 shadow-xl'
+                                    : canDrag
+                                      ? 'cursor-grab z-10 hover:z-20 hover:shadow-md'
+                                      : 'cursor-pointer z-10 hover:z-20 hover:shadow-md',
+                                )}
+                                style={{
+                                  top: 9, bottom: 9,
+                                  left: x + ml,
+                                  width: Math.max(w - ml - mr, 6),
+                                  background:   svc.bg,
+                                  border:       `2px solid ${svc.border}`,
+                                  borderRadius,
+                                  opacity: isDragging ? 0.75 : 1,
+                                  boxShadow: isDragging
+                                    ? `0 8px 24px ${svc.solid}40`
+                                    : `0 1px 3px ${svc.solid}20`,
+                                  transition: isDragging ? 'none' : 'box-shadow 0.15s, opacity 0.1s',
+                                }}
+                                onMouseDown={canDrag ? (e) => beginDrag(e, appt, 'move') : undefined}
+                                onClick={() => !drag && onAppointmentClick(appt)}
+                                title={`${therapistFullName(appt.therapist)} · ${appt.patient ? fullName(appt.patient) : svc.label} · ${fmt12(appt.startTime)} – ${fmt12(appt.endTime)}`}
+                              >
+                                {/* Service type abbreviation badge */}
+                                {w > 28 && (
+                                  <div
+                                    className="flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold ml-1.5"
+                                    style={{ background: svc.border, color: '#fff' }}
+                                  >
+                                    {svcAbbr}
+                                  </div>
+                                )}
+
+                                {/* Label text */}
+                                {w > 54 && (
+                                  <div
+                                    className="flex-1 px-1.5 min-w-0 leading-tight"
+                                    style={{ color: svc.text }}
+                                  >
+                                    <div className="text-[11px] font-semibold truncate">
+                                      {pLabel}
+                                    </div>
+                                    {w > 100 && (
+                                      <div className="text-[10px] opacity-60 truncate">
+                                        {fmtDur(appt.startTime, appt.endTime)}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Resize handle — admin/bcba only */}
+                                {canDrag && (
+                                  <div
+                                    className="absolute right-0 top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize group/rz flex-shrink-0 rounded-r-full"
+                                    onMouseDown={(e) => { e.stopPropagation(); beginDrag(e, appt, 'resize'); }}
+                                    title="Drag to resize"
+                                  >
+                                    <div
+                                      className="w-0.5 h-4 rounded-full opacity-0 group-hover/rz:opacity-50 transition-opacity"
+                                      style={{ background: svc.text }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </Fragment>
+              ))}
+
+              {/* Bottom padding */}
+              <div className="h-2" />
+            </div>
+          </div>
+        )}
+
+        {/* Legend */}
+        {visibleRows.length > 0 && (
+          <div className="px-4 py-2.5 border-t border-gray-100 dark:border-gray-700 flex flex-wrap gap-x-5 gap-y-1.5 items-center">
+            {/* Service type legend */}
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {Object.entries(SVC).map(([key, s]) => (
+                <span key={key} className="flex items-center gap-1 text-[11px] text-gray-500 dark:text-gray-400">
+                  <span
+                    className="inline-block w-2.5 h-2.5 rounded-full"
+                    style={{ background: s.solid }}
+                  />
+                  {s.label}
+                </span>
+              ))}
+            </div>
+            <div className="ml-auto flex gap-4 text-[11px] text-gray-400 dark:text-gray-500">
+              {canDrag && <span>drag to move · drag edge to resize</span>}
+              <span>click to view details</span>
+              {history.length > 0 && (
+                <span
+                  className="text-blue-500 cursor-pointer hover:underline"
+                  onClick={undo}
+                >
+                  ↩ undo last change
+                </span>
               )}
             </div>
-          );
-        })}
-      </DragDropContext>
+          </div>
+        )}
+      </div>
+
+      {conflictState && (
+        <ConflictModal
+          movedAppt={conflictState.movedAppt}
+          originalTimes={conflictState.originalTimes}
+          conflicts={conflictState.conflicts}
+          allTodayAppts={todayAppts}
+          opStart={opStart}
+          opEnd={opEnd}
+          therapists={therapists}
+          patients={patients}
+          onConfirm={(resolvedAppts) => {
+            setLocalAppts(prev => {
+              let next = [...prev];
+              for (const a of resolvedAppts) next = next.map(x => x.id === a.id ? a : x);
+              return next;
+            });
+            for (const appt of resolvedAppts) onAppointmentUpdate(appt);
+            setConflictState(null);
+          }}
+          onCancel={() => setConflictState(null)}
+        />
+      )}
     </div>
   );
 }
