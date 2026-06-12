@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { format, isSameDay } from 'date-fns';
 import { cn } from '../../lib/utils';
-import { Undo2, Clock, Info } from 'lucide-react';
+import { Undo2, Clock, Info, ArrowUpDown, Eye, Pencil } from 'lucide-react';
 import { Button } from '../ui/button';
 import ConflictModal, { findConflicts } from './ConflictModal';
 
@@ -36,6 +36,22 @@ const CONNECT_GAP = 4;     // minutes gap that counts as "consecutive"
 const toMins = (iso) => { const d = new Date(iso); return d.getHours() * 60 + d.getMinutes(); };
 const snap   = (m)   => Math.round(m / SNAP) * SNAP;
 
+function abbreviatePatientName(patient) {
+  if (!patient) return '??';
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  const f = first.substring(0, 2);
+  const l = last.substring(0, 2);
+  return `${f}${l}` || '??';
+}
+
+function fullPatientName(patient) {
+  if (!patient) return 'Unknown';
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  return `${first} ${last}`.trim() || 'Unknown';
+}
+
 function fmt12(iso) {
   const d = new Date(iso);
   const h = d.getHours(), m = d.getMinutes();
@@ -61,6 +77,7 @@ export default function UnifiedScheduleView({
   selectedLocation = null,
   onAppointmentUpdate = () => {},
   onAppointmentClick  = () => {},
+  onEditAppointment   = () => {},
 }) {
   // Local optimistic appointment state
   const [localAppts,     setLocalAppts]     = useState(appointments);
@@ -68,7 +85,11 @@ export default function UnifiedScheduleView({
   const [drag,           setDrag]           = useState(null);
   const [tooltip,        setTooltip]        = useState(null); // { x, y, text }
   const [conflictState,  setConflictState]  = useState(null);
+  const [showFullName,   setShowFullName]   = useState(false);
+  const [flipAxes,       setFlipAxes]       = useState(false);
+  const [wasDragged,     setWasDragged]     = useState(false);
   const trackRef = useRef(null);
+  const dragThreshold = 5; // pixels to consider a drag vs click
 
   useEffect(() => setLocalAppts(appointments), [appointments]);
 
@@ -114,7 +135,7 @@ export default function UnifiedScheduleView({
   }, [patients]);
 
   // ── Patient rows (only patients with appointments today) ──
-  const rows = useMemo(() => {
+  const patientRows = useMemo(() => {
     const map = {};
     todayAppts.forEach(a => {
       if (!a.patient?.id) return;
@@ -127,6 +148,22 @@ export default function UnifiedScheduleView({
       appts: [...appts].sort((a, b) => new Date(a.startTime) - new Date(b.startTime)),
     }));
   }, [todayAppts, colorOf]);
+
+  // ── Therapist rows (for flipped view) ──
+  const therapistRows = useMemo(() => {
+    const map = {};
+    todayAppts.forEach(a => {
+      if (!a.therapist?.id) return;
+      if (!map[a.therapist.id]) map[a.therapist.id] = { therapist: a.therapist, appts: [] };
+      map[a.therapist.id].appts.push(a);
+    });
+    return Object.values(map).map(({ therapist, appts }) => ({
+      therapist,
+      appts: [...appts].sort((a, b) => new Date(a.startTime) - new Date(b.startTime)),
+    }));
+  }, [todayAppts]);
+
+  const rows = flipAxes ? therapistRows : patientRows;
 
   // ── Hour markers ──
   const hourMarks = useMemo(() => {
@@ -161,6 +198,11 @@ export default function UnifiedScheduleView({
   const onMouseMove = useCallback((e) => {
     if (!drag) return;
     const dx = e.clientX - drag.mouseX0;
+    const dy = e.clientY - drag.mouseY0;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > dragThreshold) {
+      setWasDragged(true);
+    }
     const dm = snap(dx / PX_PER_MIN);
 
     setLocalAppts(prev => prev.map(a => {
@@ -209,6 +251,8 @@ export default function UnifiedScheduleView({
     }
     setDrag(null);
     setTooltip(null);
+    // Reset wasDragged after a short delay so onClick can check it
+    setTimeout(() => setWasDragged(false), 0);
   }, [drag, localAppts, onAppointmentUpdate]);
 
   useEffect(() => {
@@ -224,10 +268,12 @@ export default function UnifiedScheduleView({
   const beginDrag = (e, appt, type) => {
     e.preventDefault();
     e.stopPropagation();
+    setWasDragged(false);
     setDrag({
       type,
       id:        appt.id,
       mouseX0:   e.clientX,
+      mouseY0:   e.clientY,
       s0:        toMins(appt.startTime),
       e0:        toMins(appt.endTime),
       origStart: appt.startTime,
@@ -249,6 +295,16 @@ export default function UnifiedScheduleView({
 
   // ── Continuity stats ──
   const stats = useMemo(() => {
+    if (flipAxes) {
+      // Therapist view: just show hours, no targets
+      const data = rows.map(({ therapist, appts }) => {
+        const hrs = appts.reduce((s, a) => s + (new Date(a.endTime) - new Date(a.startTime)) / 3.6e6, 0);
+        return { therapist, hrs, target: 0, pct: null, color: PALETTE[0] };
+      });
+      const totalHrs = data.reduce((s, d) => s + d.hrs, 0);
+      return { data, totalHrs, totalTarget: 0, overall: null };
+    }
+
     const data = rows.map(({ patient, appts, color }) => {
       const hrs = appts.reduce((s, a) => s + (new Date(a.endTime) - new Date(a.startTime)) / 3.6e6, 0);
       const target = (patient.requiredWeeklyHours || patient.approvedHours || 0) / 5;
@@ -259,7 +315,7 @@ export default function UnifiedScheduleView({
     const totalTarget = data.reduce((s, d) => s + d.target, 0);
     const overall     = totalTarget > 0 ? Math.min(100, (totalHrs / totalTarget) * 100) : null;
     return { data, totalHrs, totalTarget, overall };
-  }, [rows]);
+  }, [rows, flipAxes]);
 
   if (!todayAppts.length) {
     return (
@@ -279,13 +335,16 @@ export default function UnifiedScheduleView({
         <div className="flex items-start justify-between mb-4">
           <div>
             <h3 className="font-semibold text-gray-900 dark:text-white text-base">
-              Today's Coverage
+              {flipAxes ? "Today's Therapist Schedule" : "Today's Coverage"}
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-              {stats.totalHrs.toFixed(1)}h of {stats.totalTarget.toFixed(1)}h daily target
+              {flipAxes
+                ? `${stats.data.length} therapist${stats.data.length !== 1 ? 's' : ''} · ${stats.totalHrs.toFixed(1)}h total`
+                : `${stats.totalHrs.toFixed(1)}h of ${stats.totalTarget.toFixed(1)}h daily target`
+              }
             </p>
           </div>
-          {stats.overall !== null && (
+          {!flipAxes && stats.overall !== null && (
             <div className="flex flex-col items-end">
               <span className={cn(
                 "text-3xl font-bold tabular-nums",
@@ -299,41 +358,80 @@ export default function UnifiedScheduleView({
           )}
         </div>
 
-        {/* Per-patient bars */}
+        {/* Per-row bars */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
-          {stats.data.map(({ patient, hrs, target, pct, color }) => (
-            <div key={patient.id} className="flex items-center gap-2.5 min-w-0">
-              <div
-                className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
-                style={{ background: color.solid }}
-              >
-                {patient.firstName?.[0]}{patient.lastName?.[0]}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex justify-between items-baseline mb-1">
-                  <span className="text-xs font-medium truncate text-gray-700 dark:text-gray-300">
-                    {patient.firstName} {patient.lastName?.[0]}.
-                  </span>
-                  <span className="text-xs text-gray-400 ml-1 flex-shrink-0">
-                    {hrs.toFixed(1)}h{target ? `/${target.toFixed(1)}h` : ''}
-                  </span>
+          {stats.data.map((item, idx) => {
+            if (flipAxes) {
+              const { therapist, hrs } = item;
+              const therapistInitials = therapist
+                ? `${therapist.firstName?.[0] || ''}${therapist.lastName?.[0] || ''}`
+                : '?';
+              const therapistLabel = therapist
+                ? `${therapist.firstName || ''} ${therapist.lastName?.[0] || ''}.`.trim()
+                : 'Unknown';
+              return (
+                <div key={therapist.id} className="flex items-center gap-2.5 min-w-0">
+                  <div
+                    className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                    style={{ background: PALETTE[idx % PALETTE.length].solid }}
+                  >
+                    {therapistInitials}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex justify-between items-baseline mb-1">
+                      <span className="text-xs font-medium truncate text-gray-700 dark:text-gray-300">
+                        {therapistLabel}
+                      </span>
+                      <span className="text-xs text-gray-400 ml-1 flex-shrink-0">
+                        {hrs.toFixed(1)}h
+                      </span>
+                    </div>
+                    <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full"
+                        style={{ background: PALETTE[idx % PALETTE.length].solid, opacity: 0.5 }}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                  {pct !== null ? (
-                    <div
-                      className="h-full rounded-full transition-all duration-500"
-                      style={{
-                        width: `${pct}%`,
-                        background: pct >= 85 ? '#10B981' : pct >= 60 ? '#F59E0B' : color.solid,
-                      }}
-                    />
-                  ) : (
-                    <div className="h-full rounded-full w-full" style={{ background: color.solid, opacity: 0.3 }} />
-                  )}
+              );
+            }
+
+            const { patient, hrs, target, pct, color } = item;
+            return (
+              <div key={patient.id} className="flex items-center gap-2.5 min-w-0">
+                <div
+                  className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                  style={{ background: color.solid }}
+                >
+                  {abbreviatePatientName(patient)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-baseline mb-1">
+                    <span className="text-xs font-medium truncate text-gray-700 dark:text-gray-300">
+                      {showFullName ? fullPatientName(patient) : abbreviatePatientName(patient)}
+                    </span>
+                    <span className="text-xs text-gray-400 ml-1 flex-shrink-0">
+                      {hrs.toFixed(1)}h{target ? `/${target.toFixed(1)}h` : ''}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                    {pct !== null ? (
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{
+                          width: `${pct}%`,
+                          background: pct >= 85 ? '#10B981' : pct >= 60 ? '#F59E0B' : color.solid,
+                        }}
+                      />
+                    ) : (
+                      <div className="h-full rounded-full w-full" style={{ background: color.solid, opacity: 0.3 }} />
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -351,6 +449,30 @@ export default function UnifiedScheduleView({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowFullName(v => !v)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all',
+                showFullName
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                  : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+              )}
+            >
+              <Eye className="h-3.5 w-3.5" />
+              Full Name
+            </button>
+            <button
+              onClick={() => setFlipAxes(v => !v)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all',
+                flipAxes
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                  : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+              )}
+            >
+              <ArrowUpDown className="h-3.5 w-3.5" />
+              Flip Axes
+            </button>
             {history.length > 0 && (
               <Button variant="outline" size="sm" onClick={undo} className="flex items-center gap-1.5 text-xs">
                 <Undo2 className="h-3.5 w-3.5" />
@@ -379,7 +501,7 @@ export default function UnifiedScheduleView({
                 className="px-4 flex items-center text-xs font-medium text-gray-400 dark:text-gray-500 border-r border-gray-100 dark:border-gray-700"
                 style2={{ height: 36 }}
               >
-                Patient
+                {flipAxes ? 'Therapist' : 'Patient'}
               </div>
               <div className="relative flex-1" style={{ height: 36 }}>
                 {/* Out-of-hours shading in header */}
@@ -416,30 +538,136 @@ export default function UnifiedScheduleView({
               </div>
             </div>
 
-            {/* ── Patient rows ─────────────────────────────────────────────── */}
-            {rows.map(({ patient, appts, color }, rowIdx) => (
-              <div
-                key={patient.id}
-                className={cn(
-                  "flex border-b border-gray-50 dark:border-gray-700/40",
-                  rowIdx % 2 === 1 && "bg-gray-50/40 dark:bg-gray-800/60"
-                )}
-                style={{ height: ROW_H }}
-              >
-                {/* Label */}
+            {/* ── Rows ─────────────────────────────────────────────── */}
+            {rows.map((row, rowIdx) => {
+              if (flipAxes) {
+                const { therapist, appts } = row;
+                const therapistInitials = therapist
+                  ? `${therapist.firstName?.[0] || ''}${therapist.lastName?.[0] || ''}`
+                  : '?';
+                const therapistLabel = therapist
+                  ? `${therapist.firstName || ''} ${therapist.lastName?.[0] || ''}.`.trim()
+                  : 'Unknown';
+                const thColor = PALETTE[rowIdx % PALETTE.length];
+                return (
+                  <div
+                    key={therapist.id}
+                    className={cn(
+                      "flex border-b border-gray-50 dark:border-gray-700/40",
+                      rowIdx % 2 === 1 && "bg-gray-50/40 dark:bg-gray-800/60"
+                    )}
+                    style={{ height: ROW_H }}
+                  >
+                    <div
+                      style={{ width: LABEL_W, flexShrink: 0 }}
+                      className="px-3 flex items-center gap-2.5 border-r border-gray-100 dark:border-gray-700 shrink-0"
+                    >
+                      <div
+                        className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-bold text-white shadow-sm"
+                        style={{ background: thColor.solid }}
+                      >
+                        {therapistInitials}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate leading-tight">
+                          {therapistLabel}
+                        </div>
+                        <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
+                          {appts.length} session{appts.length !== 1 ? 's' : ''}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="relative flex-1" style={{ height: ROW_H }}>
+                      {gsMin < opStart && (
+                        <div
+                          className="absolute top-0 bottom-0 pointer-events-none"
+                          style={{ left: 0, width: (opStart - gsMin) * PX_PER_MIN, background: 'rgba(0,0,0,0.04)' }}
+                        />
+                      )}
+                      {geMin > opEnd && (
+                        <div
+                          className="absolute top-0 bottom-0 pointer-events-none"
+                          style={{ left: (opEnd - gsMin) * PX_PER_MIN, right: 0, background: 'rgba(0,0,0,0.04)' }}
+                        />
+                      )}
+                      {hourMarks.filter(m => !m.isHalf).map((m, i) => (
+                        <div key={i} className="absolute top-0 bottom-0 border-l border-gray-100 dark:border-gray-700/40" style={{ left: m.x }} />
+                      ))}
+                      <div
+                        className="absolute top-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+                        style={{ left: 0, right: 0, height: 3, background: thColor.border, opacity: 0.35 }}
+                      />
+                      {appts.map((appt, idx) => {
+                        const { x, w } = layout(appt);
+                        const prev = appts[idx - 1];
+                        const next = appts[idx + 1];
+                        const fromPrev = prev && isConsecutive(prev, appt);
+                        const toNext   = next && isConsecutive(appt, next);
+                        const isDragging = drag?.id === appt.id;
+                        const np = NON_PATIENT_STYLE[appt.serviceType];
+                        const blockColor = np ? { light: np.light, border: np.border, text: np.text } : thColor;
+                        const rOuter = '999px';
+                        const rInner = '5px';
+                        const borderRadius = [fromPrev ? rInner : rOuter, toNext ? rInner : rOuter, toNext ? rInner : rOuter, fromPrev ? rInner : rOuter].join(' ');
+                        const ml = fromPrev ? 1 : 0;
+                        const mr = toNext ? 1 : 0;
+                        const patientName = appt.patient
+                          ? (showFullName ? fullPatientName(appt.patient) : abbreviatePatientName(appt.patient))
+                          : np?.label || 'Direct';
+                        return (
+                          <div
+                            key={appt.id}
+                            className={cn("absolute flex items-center overflow-visible transition-shadow", isDragging ? "cursor-grabbing z-30 shadow-xl" : "cursor-grab z-10 hover:z-20 hover:shadow-md")}
+                            style={{ top: 9, bottom: 9, left: x + ml, width: Math.max(w - ml - mr, 6), background: blockColor.light, border: `2px solid ${blockColor.border}`, borderRadius, opacity: isDragging ? 0.75 : 1, boxShadow: isDragging ? `0 8px 24px ${blockColor.solid}40` : `0 1px 3px ${blockColor.solid}20`, transition: isDragging ? 'none' : 'box-shadow 0.15s, opacity 0.1s' }}
+                            onMouseDown={(e) => beginDrag(e, appt, 'move')}
+                            onClick={() => !drag && onAppointmentClick(appt)}
+                            title={`${fmt12(appt.startTime)} – ${fmt12(appt.endTime)} · ${appt.serviceType}`}
+                          >
+                            {w > 52 && (
+                              <div className="flex-1 px-1.5 min-w-0 leading-tight" style={{ color: blockColor.text }}>
+                                <div className="text-[11px] font-semibold truncate">{np ? np.label : patientName}</div>
+                                {w > 90 && <div className="text-[10px] opacity-70 truncate">{fmtDur(appt.startTime, appt.endTime)}</div>}
+                              </div>
+                            )}
+                            <div
+                              className="absolute right-0 top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize group/rz flex-shrink-0 rounded-r-full"
+                              onMouseDown={(e) => { e.stopPropagation(); beginDrag(e, appt, 'resize'); }}
+                              title="Drag to resize"
+                            >
+                              <div className="w-0.5 h-4 rounded-full opacity-0 group-hover/rz:opacity-50 transition-opacity" style={{ background: blockColor.text }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              const { patient, appts, color } = row;
+              return (
                 <div
-                  style={{ width: LABEL_W, flexShrink: 0 }}
-                  className="px-3 flex items-center gap-2.5 border-r border-gray-100 dark:border-gray-700 shrink-0"
+                  key={patient.id}
+                  className={cn(
+                    "flex border-b border-gray-50 dark:border-gray-700/40",
+                    rowIdx % 2 === 1 && "bg-gray-50/40 dark:bg-gray-800/60"
+                  )}
+                  style={{ height: ROW_H }}
                 >
+                  {/* Label */}
+                  <div
+                    style={{ width: LABEL_W, flexShrink: 0 }}
+                    className="px-3 flex items-center gap-2.5 border-r border-gray-100 dark:border-gray-700 shrink-0"
+                  >
                   <div
                     className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-bold text-white shadow-sm"
                     style={{ background: color.solid }}
                   >
-                    {patient.firstName?.[0]}{patient.lastName?.[0]}
+                    {abbreviatePatientName(patient)}
                   </div>
                   <div className="min-w-0">
                     <div className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate leading-tight">
-                      {patient.firstName} {patient.lastName}
+                      {showFullName ? fullPatientName(patient) : abbreviatePatientName(patient)}
                     </div>
                     <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
                       {appts.length} session{appts.length !== 1 ? 's' : ''}
@@ -507,8 +735,9 @@ export default function UnifiedScheduleView({
                       ? { light: np.light, border: np.border, text: np.text }
                       : color;
 
-                    const therapistInitials = appt.therapist
-                      ? `${appt.therapist.firstName?.[0] || ''}${appt.therapist.lastName?.[0] || ''}`
+                    const therapist = appt.therapist;
+                    const therapistLabel = therapist
+                      ? `${therapist.firstName || ''} ${therapist.lastName?.[0] || ''}.`.trim()
                       : '?';
 
                     // Capsule radius: rounded outer ends, tight inner joins
@@ -529,7 +758,7 @@ export default function UnifiedScheduleView({
                       <div
                         key={appt.id}
                         className={cn(
-                          "absolute flex items-center overflow-visible transition-shadow",
+                          "absolute flex items-center overflow-visible transition-shadow group",
                           isDragging
                             ? "cursor-grabbing z-30 shadow-xl"
                             : "cursor-grab z-10 hover:z-20 hover:shadow-md"
@@ -548,16 +777,33 @@ export default function UnifiedScheduleView({
                           transition: isDragging ? 'none' : 'box-shadow 0.15s, opacity 0.1s',
                         }}
                         onMouseDown={(e) => beginDrag(e, appt, 'move')}
-                        onClick={() => !drag && onAppointmentClick(appt)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!wasDragged) onAppointmentClick(appt);
+                        }}
                         title={`${fmt12(appt.startTime)} – ${fmt12(appt.endTime)} · ${appt.serviceType}`}
                       >
+                        {/* Edit icon - visible on hover */}
+                        {w > 40 && (
+                          <button
+                            className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 shadow-sm flex items-center justify-center opacity-0 group-hover:opacity-100 hover:opacity-100 transition-opacity z-20"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onEditAppointment(appt);
+                            }}
+                            title="Edit appointment"
+                          >
+                            <Pencil className="h-2.5 w-2.5 text-gray-600 dark:text-gray-300" />
+                          </button>
+                        )}
+
                         {/* Therapist badge */}
                         {w > 32 && (
                           <div
                             className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ml-1.5"
                             style={{ background: blockColor.border, color: blockColor.text }}
                           >
-                            {therapistInitials}
+                            {therapist.firstName?.[0]}{therapist.lastName?.[0]}
                           </div>
                         )}
 
@@ -568,7 +814,7 @@ export default function UnifiedScheduleView({
                             style={{ color: blockColor.text }}
                           >
                             <div className="text-[11px] font-semibold truncate">
-                              {np ? np.label : therapistInitials}
+                              {np ? np.label : therapistLabel}
                             </div>
                             {w > 90 && (
                               <div className="text-[10px] opacity-70 truncate">
@@ -594,7 +840,8 @@ export default function UnifiedScheduleView({
                   })}
                 </div>
               </div>
-            ))}
+            );
+            })}
 
             {/* Bottom padding */}
             <div className="h-2" />

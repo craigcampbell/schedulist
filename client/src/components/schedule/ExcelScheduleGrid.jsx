@@ -15,7 +15,8 @@ import {
   Coffee,
   Settings2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ArrowUpDown
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -52,6 +53,8 @@ export default function ExcelScheduleGrid({
   const [showValidationWarnings, setShowValidationWarnings] = useState(true);
   const [draggedAppointment, setDraggedAppointment] = useState(null);
   const [dragOverSlot, setDragOverSlot] = useState(null);
+  const [showFullName, setShowFullName] = useState(false);
+  const [flipAxes, setFlipAxes] = useState(false);
 
   // Grid customization state
   const [showGridSettings, setShowGridSettings] = useState(false);
@@ -125,6 +128,10 @@ export default function ExcelScheduleGrid({
   // Format patient name based on user role (matching Excel format)
   const formatPatientName = (patient) => {
     if (!patient) return 'Unknown';
+    
+    if (showFullName) {
+      return `${patient.firstName || 'Unknown'} ${patient.lastName || ''}`.trim();
+    }
     
     // For all roles in Excel schedule grid, show abbreviated names (first 2 + last 2 chars)
     const firstTwo = patient.firstName?.substring(0, 2) || '--';
@@ -484,6 +491,32 @@ export default function ExcelScheduleGrid({
               Grid
               {showGridSettings ? <ChevronUp className="h-3 w-3 ml-1" /> : <ChevronDown className="h-3 w-3 ml-1" />}
             </Button>
+
+            <button
+              onClick={() => setShowFullName(v => !v)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all',
+                showFullName
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                  : 'bg-gray-100 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+              )}
+            >
+              <Eye className="h-3.5 w-3.5" />
+              Full Name
+            </button>
+
+            <button
+              onClick={() => setFlipAxes(v => !v)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all',
+                flipAxes
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                  : 'bg-gray-100 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+              )}
+            >
+              <ArrowUpDown className="h-3.5 w-3.5" />
+              Flip Axes
+            </button>
           </div>
         </div>
 

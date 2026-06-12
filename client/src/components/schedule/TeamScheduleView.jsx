@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import { format, isSameDay } from 'date-fns';
 import { cn } from '../../lib/utils';
-import { Undo2, Users, ChevronDown, ChevronRight } from 'lucide-react';
+import { Undo2, Users, ChevronDown, ChevronRight, ArrowUpDown, Eye } from 'lucide-react';
 import { Button } from '../ui/button';
 import ConflictModal, { findConflicts } from './ConflictModal';
 
@@ -61,6 +61,22 @@ function svcStyle(serviceType) {
 
 function teamColor(team, idx) {
   return team.color || TEAM_COLORS[idx % TEAM_COLORS.length];
+}
+
+function abbreviatePatientName(patient) {
+  if (!patient) return '??';
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  const f = first.substring(0, 2);
+  const l = last.substring(0, 2);
+  return `${f}${l}` || '??';
+}
+
+function fullPatientName(patient) {
+  if (!patient) return 'Unknown';
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  return `${first} ${last}`.trim() || 'Unknown';
 }
 
 // ─── HourHeader ───────────────────────────────────────────────────────────────
@@ -143,6 +159,7 @@ function TherapistRow({
   onCellClick,
   team,
   rowIdx,
+  showFullName = false,
 }) {
   const sorted = useMemo(
     () => [...appts].sort((a, b) => new Date(a.startTime) - new Date(b.startTime)),
@@ -286,9 +303,9 @@ function TherapistRow({
           const ml = fromPrev ? 1 : 0;
           const mr = toNext   ? 1 : 0;
 
-          const patientName = appt.patient?.decryptedFirstName
-            || appt.patient?.firstName
-            || null;
+          const patientName = appt.patient
+            ? (showFullName ? fullPatientName(appt.patient) : abbreviatePatientName(appt.patient))
+            : null;
 
           const tooltipText = `${fmt12(appt.startTime)} – ${fmt12(appt.endTime)} · ${sty.label}${patientName ? ' · ' + patientName : ''}`;
 
@@ -386,6 +403,7 @@ function TeamSection({
   onAppointmentClick,
   onCellClick,
   selectedDate,
+  showFullName = false,
 }) {
   const color = team.color || TEAM_COLORS[teamIdx % TEAM_COLORS.length];
 
@@ -489,6 +507,7 @@ function TeamSection({
                   onCellClick={onCellClick}
                   team={teamWithDate}
                   rowIdx={rowIdx}
+                  showFullName={showFullName}
                 />
               ))
             )}
@@ -521,6 +540,8 @@ export default function TeamScheduleView({
   const [drag,          setDrag]          = useState(null);
   const [tooltip,       setTooltip]       = useState(null);
   const [conflictState, setConflictState] = useState(null);
+  const [showFullName,  setShowFullName]  = useState(false);
+  const [flipAxes,      setFlipAxes]      = useState(false);
   // Collapsed state keyed by team.id; default all expanded
   const [collapsed,  setCollapsed]  = useState(() => {
     if (teams.length > 3) {
@@ -699,6 +720,30 @@ export default function TeamScheduleView({
             <div className="text-xl font-bold tabular-nums text-gray-900 dark:text-white">{totalHrs.toFixed(1)}h</div>
             <div className="text-[11px] text-gray-400">total hours</div>
           </div>
+          <button
+            onClick={() => setShowFullName(v => !v)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all',
+              showFullName
+                ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+            )}
+          >
+            <Eye className="h-3.5 w-3.5" />
+            Full Name
+          </button>
+          <button
+            onClick={() => setFlipAxes(v => !v)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all',
+              flipAxes
+                ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+            )}
+          >
+            <ArrowUpDown className="h-3.5 w-3.5" />
+            Flip Axes
+          </button>
           {history.length > 0 && (
             <Button variant="outline" size="sm" onClick={undo} className="flex items-center gap-1.5 text-xs">
               <Undo2 className="h-3.5 w-3.5" />
@@ -737,6 +782,7 @@ export default function TeamScheduleView({
           onAppointmentClick={onAppointmentClick}
           onCellClick={onCellClick}
           selectedDate={selectedDate}
+          showFullName={showFullName}
         />
       ))}
 

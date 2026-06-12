@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { format, isSameDay } from 'date-fns';
 import { cn } from '../../lib/utils';
-import { Search, Undo2, X, ShieldCheck } from 'lucide-react';
+import { Search, Undo2, X, ShieldCheck, ArrowUpDown, Eye } from 'lucide-react';
 import { Button } from '../ui/button';
 import ConflictModal, { findConflicts } from './ConflictModal';
 
@@ -69,6 +69,22 @@ function parseHHMM(str, fallback) {
 }
 
 // ─── HIPAA name formatter ──────────────────────────────────────────────────────
+function abbreviatePatientName(patient) {
+  if (!patient) return '??';
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  const f = first.substring(0, 2);
+  const l = last.substring(0, 2);
+  return `${f}${l}` || '??';
+}
+
+function fullPatientName(patient) {
+  if (!patient) return 'Unknown';
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  return `${first} ${last}`.trim() || 'Unknown';
+}
+
 function hipaaName(patient) {
   if (!patient) return null;
   const first = patient.decryptedFirstName || patient.firstName || '';
@@ -85,9 +101,10 @@ function fullName(patient) {
   return `${first} ${last}`.trim() || 'Unknown';
 }
 
-function patientLabel(patient, hipaa) {
+function patientLabel(patient, hipaa, showFull) {
   if (!patient) return null;
-  return hipaa ? hipaaName(patient) : fullName(patient);
+  if (showFull) return fullPatientName(patient);
+  return hipaa ? hipaaName(patient) : abbreviatePatientName(patient);
 }
 
 function therapistFullName(t) {
@@ -128,6 +145,8 @@ export default function EnhancedScheduleView({
   const [filterServiceType, setFilterServiceType] = useState('all');
   const [filterTeam,        setFilterTeam]        = useState('all');
   const [hipaaMode,         setHipaaMode]         = useState(false);
+  const [showFullName,      setShowFullName]      = useState(false);
+  const [flipAxes,          setFlipAxes]          = useState(false);
 
   const canDrag = userRole === 'admin' || userRole === 'bcba';
 
@@ -504,6 +523,34 @@ export default function EnhancedScheduleView({
             HIPAA
           </button>
 
+          {/* Full name toggle */}
+          <button
+            onClick={() => setShowFullName(v => !v)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-xl border transition-all',
+              showFullName
+                ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                : 'bg-gray-100 dark:bg-gray-700 border-transparent text-gray-600 dark:text-gray-400 hover:border-gray-300'
+            )}
+          >
+            <Eye className="h-3.5 w-3.5" />
+            Full Name
+          </button>
+
+          {/* Flip axes toggle */}
+          <button
+            onClick={() => setFlipAxes(v => !v)}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-xl border transition-all',
+              flipAxes
+                ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                : 'bg-gray-100 dark:bg-gray-700 border-transparent text-gray-600 dark:text-gray-400 hover:border-gray-300'
+            )}
+          >
+            <ArrowUpDown className="h-3.5 w-3.5" />
+            Flip Axes
+          </button>
+
           {/* Results count + clear */}
           {isFiltering && (
             <div className="flex items-center gap-2 ml-auto flex-shrink-0">
@@ -755,7 +802,7 @@ export default function EnhancedScheduleView({
 
                             // Patient label
                             const pLabel = appt.patient
-                              ? patientLabel(appt.patient, hipaaMode)
+                              ? patientLabel(appt.patient, hipaaMode, showFullName)
                               : svc.label;
 
                             // Service abbreviation for narrow blocks

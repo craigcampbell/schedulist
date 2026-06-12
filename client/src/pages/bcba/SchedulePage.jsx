@@ -6,6 +6,8 @@ import { useLocation } from 'react-router-dom';
 import { format, addDays, subDays, startOfDay, isSameDay, parseISO } from 'date-fns';
 import apiClient from '../../api/client';
 import { validateAppointmentClient, formatConflictMessages } from '../../utils/conflictDetection';
+import { findConflicts } from '../../components/schedule/ConflictModal';
+import ConflictModal from '../../components/schedule/ConflictModal';
 import { 
   Calendar, 
   ChevronLeft, 
@@ -126,6 +128,7 @@ export default function BCBASchedulePage() {
   const [isFormPreFilled, setIsFormPreFilled] = useState(false);
   const [pendingChanges, setPendingChanges] = useState([]); // [{ appointmentId, originalStartTime, originalEndTime, newStartTime, therapistId }]
   const [isCommitting, setIsCommitting] = useState(false);
+  const [editConflictState, setEditConflictState] = useState(null);
   const [formState, setFormState] = useState({
     patientId: '',
     therapistId: '',
@@ -600,32 +603,77 @@ export default function BCBASchedulePage() {
       return;
     }
 
+    // Prepare appointment data
+    const startDateTime = new Date(`${editFormState.date}T${editFormState.startTime}`);
+    const endDateTime = new Date(`${editFormState.date}T${editFormState.endTime}`);
+
+    const appointmentData = {
+      patientId: editFormState.patientId || null,
+      therapistId: editFormState.therapistId,
+      bcbaId: editFormState.bcbaId,
+      locationId: editFormState.locationId || null,
+      startTime: startDateTime.toISOString(),
+      endTime: endDateTime.toISOString(),
+      title: editFormState.title || '',
+      notes: editFormState.notes || '',
+      serviceType: editFormState.serviceType,
+      status: editFormState.status,
+      recurring: editFormState.recurring || false,
+    };
+
+    // Check for conflicts
+    const timeChanged = appointmentData.startTime !== editingAppointment.startTime || 
+                        appointmentData.endTime !== editingAppointment.endTime;
+    const therapistChanged = appointmentData.therapistId !== editingAppointment.therapistId;
+    
+    if (timeChanged || therapistChanged) {
+      const allAppointments = appointments || [];
+      const conflicts = findConflicts(
+        { ...appointmentData, id: editingAppointment.id },
+        allAppointments.filter(a => a.id !== editingAppointment.id)
+      );
+      
+      if (conflicts.length > 0) {
+        setEditConflictState({
+          appointmentData,
+          conflicts,
+          originalTimes: { startTime: editingAppointment.startTime, endTime: editingAppointment.endTime },
+        });
+        return;
+      }
+    }
+
+    // No conflicts, proceed with update
     setIsSubmittingForm(true);
     setFormError(null);
 
     try {
-      // Prepare appointment data
-      const startDateTime = new Date(`${editFormState.date}T${editFormState.startTime}`);
-      const endDateTime = new Date(`${editFormState.date}T${editFormState.endTime}`);
-
-      const appointmentData = {
-        patientId: editFormState.patientId || null,
-        therapistId: editFormState.therapistId,
-        bcbaId: editFormState.bcbaId,
-        locationId: editFormState.locationId || null,
-        startTime: startDateTime.toISOString(),
-        endTime: endDateTime.toISOString(),
-        title: editFormState.title || '',
-        notes: editFormState.notes || '',
-        serviceType: editFormState.serviceType,
-        status: editFormState.status,
-        recurring: editFormState.recurring || false,
-      };
-
       await updateAppointmentMutation.mutateAsync({ 
         id: editingAppointment.id, 
         data: appointmentData 
       });
+      setShowEditForm(false);
+      setEditingAppointment(null);
+    } catch (error) {
+      setFormError(error.response?.data?.message || 'Failed to update appointment');
+    } finally {
+      setIsSubmittingForm(false);
+    }
+  };
+
+  // Handle conflict resolution from edit modal
+  const handleEditConflictConfirm = async (resolvedAppts) => {
+    setIsSubmittingForm(true);
+    try {
+      for (const appt of resolvedAppts) {
+        await updateAppointmentMutation.mutateAsync({ 
+          id: appt.id, 
+          data: appt 
+        });
+      }
+      setShowEditForm(false);
+      setEditingAppointment(null);
+      setEditConflictState(null);
     } catch (error) {
       setFormError(error.response?.data?.message || 'Failed to update appointment');
     } finally {
@@ -1093,6 +1141,7 @@ export default function BCBASchedulePage() {
               selectedLocation={selectedLocation}
               onAppointmentUpdate={handleAppointmentUpdate}
               onAppointmentClick={handleAppointmentClick}
+              onEditAppointment={openEditForm}
               userRole={user?.roles?.includes('admin') ? 'admin' : 'bcba'}
             />
           )}
@@ -1262,6 +1311,18 @@ export default function BCBASchedulePage() {
           timeSlots={timeSlots}
           onSubmit={handleSubmitEdit}
           onClose={toggleEditForm}
+        />
+      )}
+
+      {/* Edit Conflict Modal */}
+      {editConflictState && (
+        <ConflictModal
+          movedAppt={{ ...editConflictState.appointmentData, id: editingAppointment?.id }}
+          originalTimes={editConflictState.originalTimes}
+          conflicts={editConflictState.conflicts}
+          allTodayAppts={appointments || []}
+          onConfirm={handleEditConflictConfirm}
+          onCancel={() => setEditConflictState(null)}
         />
       )}
     </div>

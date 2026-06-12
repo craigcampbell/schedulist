@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { format, isSameDay } from 'date-fns';
 import { cn } from '../../lib/utils';
-import { Undo2, Clock, AlertTriangle, Info } from 'lucide-react';
+import { Undo2, Clock, AlertTriangle, Info, ArrowUpDown, Eye, Pencil } from 'lucide-react';
 import { Button } from '../ui/button';
 import ConflictModal, { findConflicts } from './ConflictModal';
 
@@ -59,11 +59,20 @@ function parseHHMM(str, fallback) {
   return h * 60 + (m || 0);
 }
 
-function getPatientName(patient) {
-  if (!patient) return { first: '?', last: '?' };
-  const first = patient.decryptedFirstName || patient.firstName || '?';
-  const last  = patient.decryptedLastName  || patient.lastName  || '?';
-  return { first, last };
+function abbreviatePatientName(patient) {
+  if (!patient) return '??';
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  const f = first.substring(0, 2);
+  const l = last.substring(0, 2);
+  return `${f}${l}` || '??';
+}
+
+function fullPatientName(patient) {
+  if (!patient) return 'Unknown';
+  const first = patient.decryptedFirstName || patient.firstName || '';
+  const last  = patient.decryptedLastName  || patient.lastName  || '';
+  return `${first} ${last}`.trim() || 'Unknown';
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────────
@@ -88,7 +97,11 @@ export default function PatientScheduleGrid({
   const [drag,          setDrag]          = useState(null);
   const [tooltip,       setTooltip]       = useState(null);
   const [conflictState, setConflictState] = useState(null);
+  const [showFullName,  setShowFullName]  = useState(false);
+  const [flipAxes,      setFlipAxes]      = useState(false);
+  const [wasDragged,    setWasDragged]    = useState(false);
   const trackRef = useRef(null);
+  const dragThreshold = 5;
 
   useEffect(() => setLocalAppts(appointments), [appointments]);
 
@@ -124,16 +137,16 @@ export default function PatientScheduleGrid({
     const m = {};
     [...patients]
       .sort((a, b) => {
-        const na = getPatientName(a);
-        const nb = getPatientName(b);
-        return na.first.localeCompare(nb.first);
+        const na = abbreviatePatientName(a);
+        const nb = abbreviatePatientName(b);
+        return na.localeCompare(nb);
       })
       .forEach((p, i) => { m[p.id] = PALETTE[i % PALETTE.length]; });
     return m;
   }, [patients]);
 
   // ── Build patient rows from today's appointments ──
-  const allRows = useMemo(() => {
+  const patientRows = useMemo(() => {
     // Index appointments by patientId
     const map = {};
     todayAppts.forEach(a => {
@@ -165,6 +178,22 @@ export default function PatientScheduleGrid({
       return { patient, appts: sorted, color, hrs, target, pct };
     });
   }, [todayAppts, patients, colorOf]);
+
+  // ── Build therapist rows (for flipped view) ──
+  const therapistRows = useMemo(() => {
+    const map = {};
+    todayAppts.forEach(a => {
+      if (!a.therapist?.id) return;
+      if (!map[a.therapist.id]) map[a.therapist.id] = { therapist: a.therapist, appts: [] };
+      map[a.therapist.id].appts.push(a);
+    });
+    return Object.values(map).map(({ therapist, appts }) => {
+      const sorted = [...appts].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+      return { therapist, appts: sorted };
+    });
+  }, [todayAppts]);
+
+  const allRows = flipAxes ? therapistRows : patientRows;
 
   // ── Apply showOnlyUncovered filter ──
   const rows = useMemo(() => {
@@ -200,9 +229,11 @@ export default function PatientScheduleGrid({
 
   // ── Coverage stats header ──
   const stats = useMemo(() => {
-    const data = allRows.map(({ patient, hrs, target, pct, color }) => ({
-      patient, hrs, target, pct, color,
-    }));
+    const data = allRows
+      .filter(r => r.patient)
+      .map(({ patient, hrs, target, pct, color }) => ({
+        patient, hrs, target, pct, color,
+      }));
     const totalHrs    = data.reduce((s, d) => s + d.hrs, 0);
     const totalTarget = data.reduce((s, d) => s + d.target, 0);
     const overall     = totalTarget > 0 ? Math.min(100, (totalHrs / totalTarget) * 100) : null;
@@ -213,6 +244,11 @@ export default function PatientScheduleGrid({
   const onMouseMove = useCallback((e) => {
     if (!drag) return;
     const dx = e.clientX - drag.mouseX0;
+    const dy = e.clientY - drag.mouseY0;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > dragThreshold) {
+      setWasDragged(true);
+    }
     const dm = snap(dx / PX_PER_MIN);
 
     setLocalAppts(prev => prev.map(a => {
@@ -257,6 +293,7 @@ export default function PatientScheduleGrid({
     }
     setDrag(null);
     setTooltip(null);
+    setTimeout(() => setWasDragged(false), 0);
   }, [drag, localAppts, onAppointmentUpdate]);
 
   useEffect(() => {
@@ -273,10 +310,12 @@ export default function PatientScheduleGrid({
     if (!canEdit) return;
     e.preventDefault();
     e.stopPropagation();
+    setWasDragged(false);
     setDrag({
       type,
       id:        appt.id,
       mouseX0:   e.clientX,
+      mouseY0:   e.clientY,
       s0:        toMins(appt.startTime),
       e0:        toMins(appt.endTime),
       origStart: appt.startTime,
@@ -339,55 +378,52 @@ export default function PatientScheduleGrid({
 
         {/* Per-patient coverage bars */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-3">
-          {stats.data.map(({ patient, hrs, target, pct, color }) => {
-            const { first, last } = getPatientName(patient);
-            return (
-              <div key={patient.id} className="flex items-center gap-2.5 min-w-0">
-                {/* Patient avatar */}
-                <div
-                  className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
-                  style={{ background: color.solid }}
-                >
-                  {first[0]}{last[0]}
+          {stats.data.map(({ patient, hrs, target, pct, color }) => (
+            <div key={patient.id} className="flex items-center gap-2.5 min-w-0">
+              {/* Patient avatar */}
+              <div
+                className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold text-white"
+                style={{ background: color.solid }}
+              >
+                {abbreviatePatientName(patient)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex justify-between items-baseline mb-1">
+                  <span className="text-xs font-medium truncate text-gray-700 dark:text-gray-300">
+                    {showFullName ? fullPatientName(patient) : abbreviatePatientName(patient)}
+                  </span>
+                  <span className="text-xs text-gray-400 ml-1 flex-shrink-0">
+                    {hrs.toFixed(1)}h{target ? `/${target.toFixed(1)}h` : ''}
+                  </span>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex justify-between items-baseline mb-1">
-                    <span className="text-xs font-medium truncate text-gray-700 dark:text-gray-300">
-                      {first} {last[0]}.
-                    </span>
-                    <span className="text-xs text-gray-400 ml-1 flex-shrink-0">
-                      {hrs.toFixed(1)}h{target ? `/${target.toFixed(1)}h` : ''}
-                    </span>
-                  </div>
-                  <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                    {pct !== null ? (
-                      <div
-                        className="h-full rounded-full transition-all duration-500"
-                        style={{
-                          width: `${pct}%`,
-                          background: pct >= 85 ? '#10B981' : pct >= 60 ? '#F59E0B' : color.solid,
-                        }}
-                      />
-                    ) : (
-                      <div
-                        className="h-full rounded-full w-full"
-                        style={{ background: color.solid, opacity: 0.3 }}
-                      />
-                    )}
-                  </div>
-                  {/* Uncovered warning */}
-                  {pct !== null && pct < 60 && (
-                    <div className="flex items-center gap-0.5 mt-0.5">
-                      <AlertTriangle className="h-2.5 w-2.5 text-red-400 flex-shrink-0" />
-                      <span className="text-[10px] text-red-500 truncate">
-                        {Math.round(pct)}% covered
-                      </span>
-                    </div>
+                <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                  {pct !== null ? (
+                    <div
+                      className="h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${pct}%`,
+                        background: pct >= 85 ? '#10B981' : pct >= 60 ? '#F59E0B' : color.solid,
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className="h-full rounded-full w-full"
+                      style={{ background: color.solid, opacity: 0.3 }}
+                    />
                   )}
                 </div>
+                {/* Uncovered warning */}
+                {pct !== null && pct < 60 && (
+                  <div className="flex items-center gap-0.5 mt-0.5">
+                    <AlertTriangle className="h-2.5 w-2.5 text-red-400 flex-shrink-0" />
+                    <span className="text-[10px] text-red-500 truncate">
+                      {Math.round(pct)}% covered
+                    </span>
+                  </div>
+                )}
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </div>
 
@@ -413,6 +449,30 @@ export default function PatientScheduleGrid({
                 <span>Incomplete coverage only</span>
               </div>
             )}
+            <button
+              onClick={() => setShowFullName(v => !v)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all',
+                showFullName
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                  : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+              )}
+            >
+              <Eye className="h-3.5 w-3.5" />
+              Full Name
+            </button>
+            <button
+              onClick={() => setFlipAxes(v => !v)}
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all',
+                flipAxes
+                  ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300'
+                  : 'bg-gray-50 dark:bg-gray-700 border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+              )}
+            >
+              <ArrowUpDown className="h-3.5 w-3.5" />
+              Flip Axes
+            </button>
             {history.length > 0 && (
               <Button variant="outline" size="sm" onClick={undo} className="flex items-center gap-1.5 text-xs">
                 <Undo2 className="h-3.5 w-3.5" />
@@ -449,7 +509,7 @@ export default function PatientScheduleGrid({
                   style={{ width: LABEL_W, flexShrink: 0, height: 36 }}
                   className="px-4 flex items-center text-xs font-medium text-gray-400 dark:text-gray-500 border-r border-gray-100 dark:border-gray-700"
                 >
-                  Patient
+                  {flipAxes ? 'Therapist' : 'Patient'}
                 </div>
                 <div className="relative flex-1" style={{ height: 36 }}>
                   {/* Out-of-hours shading in header */}
@@ -486,9 +546,10 @@ export default function PatientScheduleGrid({
                 </div>
               </div>
 
-              {/* ── Patient rows ─────────────────────────────────────────── */}
-              {rows.map(({ patient, appts, color, hrs, target, pct }, rowIdx) => {
-                const { first, last } = getPatientName(patient);
+              {/* ── Rows ─────────────────────────────────────────────────── */}
+              {rows.map((row, rowIdx) => {
+                const { patient, appts, color, hrs, target, pct } = row;
+                if (!patient) return null;
                 return (
                   <div
                     key={patient.id}
@@ -508,11 +569,11 @@ export default function PatientScheduleGrid({
                         className="w-9 h-9 rounded-full flex-shrink-0 flex items-center justify-center text-[11px] font-bold text-white shadow-sm"
                         style={{ background: color.solid }}
                       >
-                        {first[0]}{last[0]}
+                        {abbreviatePatientName(patient)}
                       </div>
                       <div className="min-w-0">
                         <div className="text-sm font-semibold text-gray-800 dark:text-gray-100 truncate leading-tight">
-                          {first} {last}
+                          {showFullName ? fullPatientName(patient) : abbreviatePatientName(patient)}
                         </div>
                         <div className="text-[10px] text-gray-400 dark:text-gray-500 leading-tight">
                           {appts.length} session{appts.length !== 1 ? 's' : ''}
@@ -527,163 +588,168 @@ export default function PatientScheduleGrid({
                           )}
                         </div>
                       </div>
-                    </div>
+                      </div>
 
-                    {/* ── Timeline track ── */}
-                    <div className="relative flex-1" style={{ height: ROW_H }}>
-
-                      {/* Out-of-hours hatching (before operating window) */}
-                      {gsMin < opStart && (
-                        <div
-                          className="absolute top-0 bottom-0 pointer-events-none"
-                          style={{
-                            left: 0,
-                            width: (opStart - gsMin) * PX_PER_MIN,
-                            background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
-                            backgroundColor: 'rgba(0,0,0,0.04)',
-                          }}
-                        />
-                      )}
-                      {/* Out-of-hours hatching (after operating window) */}
-                      {geMin > opEnd && (
-                        <div
-                          className="absolute top-0 bottom-0 pointer-events-none"
-                          style={{
-                            left: (opEnd - gsMin) * PX_PER_MIN,
-                            right: 0,
-                            background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
-                            backgroundColor: 'rgba(0,0,0,0.04)',
-                          }}
-                        />
-                      )}
-
-                      {/* Hour grid lines */}
-                      {hourMarks.filter(m => !m.isHalf).map((m, i) => (
-                        <div
-                          key={i}
-                          className="absolute top-0 bottom-0 border-l border-gray-100 dark:border-gray-700/40"
-                          style={{ left: m.x }}
-                        />
-                      ))}
-
-                      {/* Subway track line */}
-                      <div
-                        className="absolute top-1/2 -translate-y-1/2 rounded-full pointer-events-none"
-                        style={{
-                          left: 0, right: 0, height: 3,
-                          background: color.border,
-                          opacity: 0.35,
-                        }}
-                      />
-
-                      {/* Appointment blocks */}
-                      {appts.map((appt, idx) => {
-                        const { x, w } = layout(appt);
-                        const prev = appts[idx - 1];
-                        const next = appts[idx + 1];
-                        const fromPrev   = prev && isConsecutive(prev, appt);
-                        const toNext     = next && isConsecutive(appt, next);
-                        const isDragging = drag?.id === appt.id;
-
-                        // Block color: service-type override or patient palette
-                        const svc = SVC[appt.serviceType];
-                        const blockColor = svc
-                          ? { light: svc.bg, border: svc.border, solid: svc.solid, text: svc.text }
-                          : { light: color.light, border: color.border, solid: color.solid, text: color.text };
-
-                        // Therapist initials
-                        const th = appt.therapist;
-                        const therapistInitials = th
-                          ? `${th.firstName?.[0] || ''}${th.lastName?.[0] || ''}`
-                          : '?';
-
-                        // Connected-capsule border radius
-                        const rOuter = '999px';
-                        const rInner = '5px';
-                        const borderRadius = [
-                          fromPrev ? rInner : rOuter,
-                          toNext   ? rInner : rOuter,
-                          toNext   ? rInner : rOuter,
-                          fromPrev ? rInner : rOuter,
-                        ].join(' ');
-
-                        const ml = fromPrev ? 1 : 0;
-                        const mr = toNext   ? 1 : 0;
-
-                        return (
+                      {/* ── Timeline track ── */}
+                      <div className="relative flex-1" style={{ height: ROW_H }}>
+                        {/* Out-of-hours hatching (before operating window) */}
+                        {gsMin < opStart && (
                           <div
-                            key={appt.id}
-                            className={cn(
-                              "absolute flex items-center overflow-visible",
-                              canEdit && (isDragging
-                                ? "cursor-grabbing z-30 shadow-xl"
-                                : "cursor-grab z-10 hover:z-20 hover:shadow-md"),
-                              !canEdit && "cursor-pointer z-10 hover:z-20 hover:shadow-md"
-                            )}
+                            className="absolute top-0 bottom-0 pointer-events-none"
                             style={{
-                              top: 9, bottom: 9,
-                              left: x + ml,
-                              width: Math.max(w - ml - mr, 6),
-                              background:   blockColor.light,
-                              border:       `2px solid ${blockColor.border}`,
-                              borderRadius,
-                              opacity: isDragging ? 0.75 : 1,
-                              boxShadow: isDragging
-                                ? `0 8px 24px ${blockColor.solid}40`
-                                : `0 1px 3px ${blockColor.solid}20`,
-                              transition: isDragging ? 'none' : 'box-shadow 0.15s, opacity 0.1s',
+                              left: 0,
+                              width: (opStart - gsMin) * PX_PER_MIN,
+                              background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
+                              backgroundColor: 'rgba(0,0,0,0.04)',
                             }}
-                            onMouseDown={canEdit ? (e) => beginDrag(e, appt, 'move') : undefined}
-                            onClick={() => !drag && onAppointmentClick(appt)}
-                            title={`${fmt12(appt.startTime)} – ${fmt12(appt.endTime)} · ${appt.serviceType}${th ? ` · ${th.firstName} ${th.lastName}` : ' · unassigned'}`}
-                          >
-                            {/* Therapist initials badge */}
-                            {w > 28 && (
-                              <div
-                                className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ml-1.5"
-                                style={{ background: blockColor.border, color: '#fff' }}
-                              >
-                                {therapistInitials}
-                              </div>
-                            )}
+                          />
+                        )}
+                        {/* Out-of-hours hatching (after operating window) */}
+                        {geMin > opEnd && (
+                          <div
+                            className="absolute top-0 bottom-0 pointer-events-none"
+                            style={{
+                              left: (opEnd - gsMin) * PX_PER_MIN,
+                              right: 0,
+                              background: 'repeating-linear-gradient(135deg, transparent, transparent 5px, rgba(0,0,0,0.04) 5px, rgba(0,0,0,0.04) 10px)',
+                              backgroundColor: 'rgba(0,0,0,0.04)',
+                            }}
+                          />
+                        )}
 
-                            {/* Service type label + duration */}
-                            {w > 52 && (
-                              <div
-                                className="flex-1 px-1.5 min-w-0 leading-tight"
-                                style={{ color: blockColor.text }}
-                              >
-                                <div className="text-[11px] font-semibold truncate">
-                                  {svc ? svc.label : therapistInitials}
-                                </div>
-                                {w > 90 && (
-                                  <div className="text-[10px] opacity-70 truncate">
-                                    {fmtDur(appt.startTime, appt.endTime)}
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                        {/* Hour grid lines */}
+                        {hourMarks.filter(m => !m.isHalf).map((m, i) => (
+                          <div
+                            key={i}
+                            className="absolute top-0 bottom-0 border-l border-gray-100 dark:border-gray-700/40"
+                            style={{ left: m.x }}
+                          />
+                        ))}
 
-                            {/* Resize handle — only when canEdit */}
-                            {canEdit && (
-                              <div
-                                className="absolute right-0 top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize group/rz flex-shrink-0 rounded-r-full"
-                                onMouseDown={(e) => { e.stopPropagation(); beginDrag(e, appt, 'resize'); }}
-                                title="Drag to resize"
-                              >
+                        {/* Subway track line */}
+                        <div
+                          className="absolute top-1/2 -translate-y-1/2 rounded-full pointer-events-none"
+                          style={{
+                            left: 0, right: 0, height: 3,
+                            background: color.border,
+                            opacity: 0.35,
+                          }}
+                        />
+
+                        {/* Appointment blocks */}
+                        {appts.map((appt, idx) => {
+                          const { x, w } = layout(appt);
+                          const prev = appts[idx - 1];
+                          const next = appts[idx + 1];
+                          const fromPrev   = prev && isConsecutive(prev, appt);
+                          const toNext     = next && isConsecutive(appt, next);
+                          const isDragging = drag?.id === appt.id;
+
+                          // Block color: service-type override or patient palette
+                          const svc = SVC[appt.serviceType];
+                          const blockColor = svc
+                            ? { light: svc.bg, border: svc.border, solid: svc.solid, text: svc.text }
+                            : { light: color.light, border: color.border, solid: color.solid, text: color.text };
+
+                          // Therapist display
+                          const th = appt.therapist;
+                          const therapistInitials = th
+                            ? `${th.firstName?.[0] || ''}${th.lastName?.[0] || ''}`
+                            : '?';
+                          const therapistLabel = th
+                            ? `${th.firstName || ''} ${th.lastName?.[0] || ''}.`.trim()
+                            : 'Unassigned';
+
+                          // Connected-capsule border radius
+                          const rOuter = '999px';
+                          const rInner = '5px';
+                          const borderRadius = [
+                            fromPrev ? rInner : rOuter,
+                            toNext   ? rInner : rOuter,
+                            toNext   ? rInner : rOuter,
+                            fromPrev ? rInner : rOuter,
+                          ].join(' ');
+
+                          const ml = fromPrev ? 1 : 0;
+                          const mr = toNext   ? 1 : 0;
+
+                          return (
+                            <div
+                              key={appt.id}
+                              className={cn(
+                                "absolute flex items-center overflow-visible",
+                                canEdit && (isDragging
+                                  ? "cursor-grabbing z-30 shadow-xl"
+                                  : "cursor-grab z-10 hover:z-20 hover:shadow-md"),
+                                !canEdit && "cursor-pointer z-10 hover:z-20 hover:shadow-md"
+                              )}
+                              style={{
+                                top: 9, bottom: 9,
+                                left: x + ml,
+                                width: Math.max(w - ml - mr, 6),
+                                background:   blockColor.light,
+                                border:       `2px solid ${blockColor.border}`,
+                                borderRadius,
+                                opacity: isDragging ? 0.75 : 1,
+                                boxShadow: isDragging
+                                  ? `0 8px 24px ${blockColor.solid}40`
+                                  : `0 1px 3px ${blockColor.solid}20`,
+                                transition: isDragging ? 'none' : 'box-shadow 0.15s, opacity 0.1s',
+                              }}
+                              onMouseDown={canEdit ? (e) => beginDrag(e, appt, 'move') : undefined}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!wasDragged) onAppointmentClick(appt);
+                              }}
+                              title={`${fmt12(appt.startTime)} – ${fmt12(appt.endTime)} · ${appt.serviceType}${th ? ` · ${therapistLabel}` : ' · unassigned'}`}
+                            >
+                              {/* Therapist initials badge */}
+                              {w > 28 && (
                                 <div
-                                  className="w-0.5 h-4 rounded-full opacity-0 group-hover/rz:opacity-50 transition-opacity"
-                                  style={{ background: blockColor.text }}
-                                />
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                                  className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold ml-1.5"
+                                  style={{ background: blockColor.border, color: '#fff' }}
+                                >
+                                  {therapistInitials}
+                                </div>
+                              )}
+
+                              {/* Service type label + duration */}
+                              {w > 52 && (
+                                <div
+                                  className="flex-1 px-1.5 min-w-0 leading-tight"
+                                  style={{ color: blockColor.text }}
+                                >
+                                  <div className="text-[11px] font-semibold truncate">
+                                    {svc ? svc.label : therapistLabel}
+                                  </div>
+                                  {w > 90 && (
+                                    <div className="text-[10px] opacity-70 truncate">
+                                      {fmtDur(appt.startTime, appt.endTime)}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Resize handle — only when canEdit */}
+                              {canEdit && (
+                                <div
+                                  className="absolute right-0 top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize group/rz flex-shrink-0 rounded-r-full"
+                                  onMouseDown={(e) => { e.stopPropagation(); beginDrag(e, appt, 'resize'); }}
+                                  title="Drag to resize"
+                                >
+                                  <div
+                                    className="w-0.5 h-4 rounded-full opacity-0 group-hover/rz:opacity-50 transition-opacity"
+                                    style={{ background: blockColor.text }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
 
               {/* Bottom padding */}
               <div className="h-2" />
